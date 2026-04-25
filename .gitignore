@@ -8,6 +8,9 @@ node_modules/
 bun.lockb
 .bun/
 
+# Claude Code local state
+.claude/
+
 # Build outputs
 dist/
 build/

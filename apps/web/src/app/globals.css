@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-bg-base text-text-primary font-mono antialiased;
+    font-feature-settings: "ss02" on, "cv11" on;
+  }
+  ::selection {
+    @apply bg-accent-green text-bg-base;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply border border-border bg-bg-elev;
+  }
+  .hairline {
+    @apply border-t border-border;
+  }
+  .label {
+    @apply text-text-muted text-xs uppercase tracking-wide;
+  }
+}
