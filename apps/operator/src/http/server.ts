@@ -11,7 +11,8 @@
  *     - Liveness for AXL bridge / load balancers.
  *
  * Production runs this behind AXL's localhost forwarder so the wire is e2e
- * encrypted; in dev you can curl localhost:8402 directly.
+ * encrypted; in dev you can curl localhost:8402 directly. CORS is permissive
+ * so the dev frontend on :3000 can hit this directly without a proxy.
  */
 
 import type { Clients } from "../chain/clients.ts";
@@ -29,23 +30,43 @@ export interface HttpDeps {
   vaultAddress: `0x${string}`;
 }
 
+const corsHeaders: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-PAYMENT-V1-RESPONSE",
+  // Tell browsers we send X-PAYMENT-V1 in 402s so JS can read it.
+  "Access-Control-Expose-Headers": "X-PAYMENT-V1",
+};
+
+function withCors(res: Response): Response {
+  for (const [k, v] of Object.entries(corsHeaders)) res.headers.set(k, v);
+  return res;
+}
+
 export function startHttpServer(deps: HttpDeps) {
   return Bun.serve({
     port: deps.config.HTTP_PORT,
     async fetch(req: Request) {
+      // Preflight.
+      if (req.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: corsHeaders });
+      }
+
       const url = new URL(req.url);
 
       if (url.pathname === "/healthz") {
-        return new Response(JSON.stringify({ ok: true, demoMode: deps.config.DEMO_MODE }), {
-          headers: { "Content-Type": "application/json" },
-        });
+        return withCors(
+          new Response(JSON.stringify({ ok: true, demoMode: deps.config.DEMO_MODE }), {
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
       }
 
       if (url.pathname === "/x402/infer" && req.method === "POST") {
-        return handleInfer(req, deps);
+        return withCors(await handleInfer(req, deps));
       }
 
-      return new Response("not found", { status: 404 });
+      return withCors(new Response("not found", { status: 404 }));
     },
   });
 }
