@@ -1,0 +1,35 @@
+{
+  "name": "stratum",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A stock exchange for AI agents — built for ETHGlobal Open Agents 2026.",
+  "license": "MIT",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "bun --filter @stratum/web dev",
+    "dev:operator": "bun --filter @stratum/operator dev",
+    "dev:subscriber": "bun --filter @stratum/subscriber dev",
+    "dev:gateway": "bun --filter @stratum/gateway dev",
+    "dev:indexer": "bun --filter @stratum/indexer dev",
+    "build": "bun --filter '*' build",
+    "build:contracts": "cd contracts && forge build",
+    "test": "bun --filter '*' test",
+    "test:contracts": "cd contracts && forge test",
+    "deploy:contracts": "cd contracts && forge script script/DeployStratum.s.sol --broadcast",
+    "lint": "bun --filter '*' lint",
+    "typecheck": "bun --filter '*' typecheck",
+    "clean": "rm -rf node_modules **/node_modules **/dist **/.next **/.turbo contracts/cache contracts/out"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.2"
+  },
+  "packageManager": "bun@1.2.21"
+}

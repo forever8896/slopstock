@@ -1,0 +1,17 @@
+{
+  "name": "@stratum/web",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Stratum frontend — Robinhood-for-agents UI.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stratum/sdk": "workspace:*",
+    "@stratum/shared": "workspace:*"
+  }
+}

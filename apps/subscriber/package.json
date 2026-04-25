@@ -1,0 +1,22 @@
+{
+  "name": "@stratum/subscriber",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Subscriber CLI — discover, pay, and call Stratum agents over AXL+MCP.",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "stratum": "src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stratum/sdk": "workspace:*",
+    "@stratum/shared": "workspace:*"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@stratum/indexer",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ponder indexer — tracks holders, revenue history, attestation log per agent.",
+  "scripts": {
+    "dev": "ponder dev",
+    "start": "ponder start",
+    "build": "ponder build",
+    "typecheck": "tsc --noEmit"
+  }
+}

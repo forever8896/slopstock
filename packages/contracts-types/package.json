@@ -1,0 +1,14 @@
+{
+  "name": "@stratum/contracts-types",
+  "version": "0.0.1",
+  "private": true,
+  "description": "TypeScript types and ABIs auto-generated from the Foundry contracts.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "generate": "wagmi generate",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  }
+}

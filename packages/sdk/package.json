@@ -1,0 +1,23 @@
+{
+  "name": "@stratum/sdk",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Stratum SDK — wagmi hooks + viem helpers for minting, fractionalizing, subscribing, distributing.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./hooks": "./src/hooks/index.ts",
+    "./viem": "./src/viem/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stratum/contracts-types": "workspace:*",
+    "@stratum/shared": "workspace:*"
+  }
+}

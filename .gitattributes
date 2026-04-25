@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.sol  linguist-language=Solidity
+*.md   linguist-detectable=true
+
+# Don't diff lockfiles
+bun.lockb binary

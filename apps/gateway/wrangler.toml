@@ -1,0 +1,8 @@
+name = "stratum-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+workers_dev = true
+
+# Secrets (set via `wrangler secret put`):
+#   GATEWAY_SIGNER_KEY
+#   AGENT_REGISTRY_URL
