@@ -14,7 +14,7 @@ Built for [ETHGlobal Open Agents](https://ethglobal.com) — April 2026. Project
 |---|---|
 | Contracts | ✅ deployed on 0G Galileo + Base Sepolia, 71/71 tests green |
 | Hero agent | ✅ `auditor.stratum.eth` minted as tokenId 1, 1M AUDIT shares, IPO live |
-| Operator node | ✅ real LLM (Ollama-first), chain-validated x402, SQLite receipts, chain-driven /profile |
+| Operator node | ✅ real LLM (Ollama-first), chain-validated x402, SQLite receipts, chain-driven /profile, **onchain authorizeUsage write after payment** |
 | Web frontend | ✅ reads chain directly, real Marketplace + USDC payment via wagmi |
 | Subscriber CLI | ✅ `discover` / `profile` / `infer` against real chain + operator |
 | Indexer (Ponder) | ⏭ deferred — on-the-fly Transfer-walk works for v1 |
@@ -28,20 +28,20 @@ Built for [ETHGlobal Open Agents](https://ethglobal.com) — April 2026. Project
 
 | Contract | Address |
 |---|---|
-| StratumAgentNFT | `0x2F79b1950CcaA58259ea62bFe99107De75018D92` |
-| TestnetUSDC | `0x5190f454E058319C53c82ff8bDaF0CB193CA8109` |
-| Marketplace | `0x2A06246eeaf9b772CD3e7B8823298c0C8E89df48` |
-| Fractionalizer | `0x5C2Ca0331EaEC7EB272e044579EB2C28EFBC819e` |
-| AgentRegistry | `0x7c9b6C415131414dc4b55E24aB2aE0a31439a290` |
+| StratumAgentNFT | `0x96BDA325345b0c8b7946567D30648cf8a422eb59` |
+| TestnetUSDC | `0x1F2147265b104DE7b5f2C496cD19817cD8659e98` |
+| Marketplace | `0x0f33F116992C6C470BB3bD7cC72Cf6891c84b1d5` |
+| Fractionalizer | `0x4a0a6166105e90490EF9918019712d24252c0A5A` |
+| AgentRegistry | `0xB5d78dF01Fc1969A082073f6d16acaB916FACab5` |
 
 **Base Sepolia** (chain id 84532) — per-agent bundle for **AUDIT**
 
 | Contract | Address |
 |---|---|
-| ShareToken | `0x2F79b1950CcaA58259ea62bFe99107De75018D92` |
-| RevenueVault | `0x5190f454E058319C53c82ff8bDaF0CB193CA8109` |
-| IPOSale | `0x2A06246eeaf9b772CD3e7B8823298c0C8E89df48` |
-| Payment asset (Circle) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| ShareToken | `0xC257DEe33f2a709aA72Acb4Da2f657C4eb7DC0Fa` |
+| RevenueVault | `0x01667C0D76b84d6cd63C82500141340bAf0c18ce` |
+| IPOSale | `0x4563a1F9Ba44C226bb378Ed33aC997CcB423D45d` |
+| Payment asset (Circle USDC) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 Artifacts at [`contracts/deployments/`](contracts/deployments/).
 
