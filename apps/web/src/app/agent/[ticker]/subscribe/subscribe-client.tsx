@@ -1,61 +1,157 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { useAccount } from "wagmi";
+import { useEffect, useMemo, useState } from "react";
+import {
+  useAccount,
+  useChainId,
+  useReadContract,
+  useSwitchChain,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from "wagmi";
+import { baseSepolia } from "wagmi/chains";
+import { erc20Abi } from "@stratum/contracts-types";
+import { USDC_BASE_SEPOLIA } from "@stratum/shared";
 import { AttestationBadge } from "@/components/attestation-badge";
 import { AuditOutput } from "@/components/audit-output";
 import type { AgentDetail } from "@/lib/agents";
-import { buildDemoReceipt, infer, type InferResult } from "@/lib/operator";
+import { infer, type InferResult, type PaymentReceipt } from "@/lib/operator";
 import { sampleContracts } from "@/lib/sample-contracts";
+import { formatUsdc } from "@/lib/format";
 
 interface Props {
   agent: AgentDetail;
 }
 
-export function SubscribeClient({ agent }: Props) {
-  const { address } = useAccount();
-  const [input, setInput] = useState("");
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<InferResult | undefined>();
+type Hex = `0x${string}`;
 
-  // Honest sentinel when no wallet is connected. The operator's payment-receipt
-  // validation doesn't currently bind subscriber to receipt — that's Phase 3.
-  const subscriber = (address ??
-    "0x1111111111111111111111111111111111111111") as `0x${string}`;
+type FlowStage =
+  | { kind: "idle" }
+  | { kind: "preflight" }
+  | { kind: "awaiting-tx" }
+  | { kind: "tx-submitted"; hash: Hex }
+  | { kind: "infer" }
+  | { kind: "done"; result: InferResult };
+
+const BASE_CHAIN_ID = baseSepolia.id;
+
+export function SubscribeClient({ agent }: Props) {
+  const { address, isConnected } = useAccount();
+  const chainId = useChainId();
+  const { switchChain } = useSwitchChain();
+  const onBase = chainId === BASE_CHAIN_ID;
+
+  const [input, setInput] = useState("");
+  const [stage, setStage] = useState<FlowStage>({ kind: "idle" });
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const subscriber: Hex = address ?? "0x0000000000000000000000000000000000000000";
+
+  // Live USDC balance on Base Sepolia.
+  const { data: usdcBalance, refetch: refetchBalance } = useReadContract({
+    address: USDC_BASE_SEPOLIA,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    chainId: BASE_CHAIN_ID,
+    query: { enabled: Boolean(address) },
+  });
+
+  const price = agent.perCallUsdc;
+  const hasFunds = usdcBalance !== undefined && usdcBalance >= price;
+
+  // ─── Payment ──────────────────────────────────────────────────────
+  const { writeContractAsync, data: txHash } = useWriteContract();
+  const { isLoading: txPending, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
+    hash: txHash,
+    chainId: BASE_CHAIN_ID,
+  });
+
+  // Once the payment tx confirms, submit to operator.
+  useEffect(() => {
+    if (!txConfirmed || !txHash) return;
+    void submitToOperator(txHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txConfirmed, txHash]);
 
   async function runAudit() {
-    if (!input.trim()) return;
-    setRunning(true);
-    setResult(undefined);
+    if (!input.trim() || !address) return;
+    setErrorMsg(null);
+    setStage({ kind: "preflight" });
+
+    if (!onBase) {
+      setErrorMsg(`switch your wallet to Base Sepolia (chain ${BASE_CHAIN_ID})`);
+      setStage({ kind: "idle" });
+      return;
+    }
+
+    if (!hasFunds) {
+      setErrorMsg(
+        `insufficient USDC (have ${usdcBalance ? formatUsdc(usdcBalance, 2) : "0"}, need ${formatUsdc(price, 2)}). Get testnet USDC at faucet.circle.com`,
+      );
+      setStage({ kind: "idle" });
+      return;
+    }
+
     try {
-      // 1. Surface the 402 challenge so the user sees the real x402 contract.
-      const challenge = await infer({
-        tokenId: agent.tokenId.toString(),
-        input,
-        subscriber,
+      setStage({ kind: "awaiting-tx" });
+      const hash = await writeContractAsync({
+        address: USDC_BASE_SEPOLIA,
+        abi: erc20Abi,
+        functionName: "transfer",
+        args: [agent.contracts.vault, price],
+        chainId: BASE_CHAIN_ID,
       });
-      if (challenge.ok || challenge.kind === "error") {
-        setResult(challenge);
-        return;
-      }
+      setStage({ kind: "tx-submitted", hash });
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+      setStage({ kind: "idle" });
+    }
+  }
 
-      // 2. Build a payment receipt for the operator's x402 layer. Today the
-      //    operator runs in DEMO_MODE and accepts a non-empty receipt; once
-      //    Phase 3 lands, this swaps for a real Uniswap swap + on-chain settle.
-      const receipt = buildDemoReceipt();
-
-      // 3. Re-submit with the receipt header.
-      const final = await infer({
+  async function submitToOperator(hash: Hex) {
+    setStage({ kind: "infer" });
+    setErrorMsg(null);
+    const receipt: PaymentReceipt = {
+      txHash: hash,
+      facilitator: "chain",
+      receiptId: `rcpt-${crypto.randomUUID()}`,
+    };
+    try {
+      const result = await infer({
         tokenId: agent.tokenId.toString(),
         input,
         subscriber,
         paymentReceipt: receipt,
       });
-      setResult(final);
-    } finally {
-      setRunning(false);
+      setStage({ kind: "done", result });
+      void refetchBalance();
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+      setStage({ kind: "idle" });
     }
+  }
+
+  const buttonLabel = useMemo(() => {
+    switch (stage.kind) {
+      case "idle":
+        return `pay ${agent.perCallHuman} & run audit`;
+      case "preflight":
+      case "awaiting-tx":
+        return "approve in wallet…";
+      case "tx-submitted":
+        return txPending ? "waiting for confirmation…" : "submitting to operator…";
+      case "infer":
+        return "running inference…";
+      case "done":
+        return "run another audit";
+    }
+  }, [stage, txPending, agent.perCallHuman]);
+
+  function reset() {
+    setStage({ kind: "idle" });
+    setErrorMsg(null);
   }
 
   return (
@@ -74,13 +170,50 @@ export function SubscribeClient({ agent }: Props) {
         </p>
       </header>
 
+      {!isConnected ? (
+        <div className="panel border-yellow-400 px-4 py-3 text-sm">
+          connect a wallet to pay
+        </div>
+      ) : !onBase ? (
+        <div className="panel border-yellow-400 px-4 py-3 text-sm flex items-center justify-between">
+          <span>switch to Base Sepolia (chain {BASE_CHAIN_ID}) to pay USDC</span>
+          <button
+            onClick={() => switchChain({ chainId: BASE_CHAIN_ID })}
+            className="border border-accent-green px-3 py-1.5 text-xs text-accent-green hover:bg-bg-elev"
+          >
+            switch network
+          </button>
+        </div>
+      ) : null}
+
       <section className="panel p-4">
         <div className="label mb-3">payment</div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-text-muted">pay with</span>
-          <span className="border border-accent-green px-2 py-1 text-xs text-accent-green">USDC</span>
-          <span className="ml-2 text-text-muted">→ {agent.perCallHuman} USDC.base</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-text-muted">pay with</span>
+            <span className="border border-accent-green px-2 py-1 text-xs text-accent-green">USDC</span>
+            <span className="ml-2 text-text-muted">→ {agent.perCallHuman} → vault {agent.contracts.vault.slice(0, 10)}…</span>
+          </div>
+          {address && onBase ? (
+            <span className="text-xs text-text-muted">
+              your USDC: {usdcBalance !== undefined ? formatUsdc(usdcBalance, 2) : "—"}
+            </span>
+          ) : null}
         </div>
+        {address && onBase && !hasFunds ? (
+          <div className="mt-3 text-xs text-text-muted">
+            need testnet USDC?{" "}
+            <a
+              href="https://faucet.circle.com/"
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent-green hover:underline"
+            >
+              faucet.circle.com
+            </a>
+            {" "}— mint some to your address ({address.slice(0, 8)}…)
+          </div>
+        ) : null}
       </section>
 
       <section className="panel p-4">
@@ -109,21 +242,37 @@ export function SubscribeClient({ agent }: Props) {
         />
         <div className="mt-3 flex items-center justify-between">
           <div className="text-xs text-text-muted">
-            subscriber:&nbsp;<code className="text-text-primary">{subscriber}</code>
+            subscriber:&nbsp;<code className="text-text-primary">{address ?? "(no wallet)"}</code>
           </div>
           <button
             type="button"
-            onClick={runAudit}
-            disabled={running || !input.trim()}
+            onClick={stage.kind === "done" ? reset : runAudit}
+            disabled={!isConnected || !input.trim() || (stage.kind !== "idle" && stage.kind !== "done")}
             className="border border-accent-green px-4 py-2 text-sm text-accent-green hover:bg-bg-elev disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {running ? "running…" : `pay ${agent.perCallHuman} & run audit`}
+            {buttonLabel}
           </button>
         </div>
       </section>
 
-      {result ? (
-        <ResultPanel result={result} expectedMeasurement={agent.expectedTeeMeasurement} />
+      {errorMsg ? (
+        <div className="border border-accent-red bg-bg-elev px-4 py-3 text-sm text-accent-red">
+          {errorMsg}
+        </div>
+      ) : null}
+
+      {stage.kind === "tx-submitted" || stage.kind === "infer" ? (
+        <div className="panel border-blue-400 px-4 py-3 text-xs">
+          payment tx:{" "}
+          <code className="text-text-primary">
+            {(stage as { hash?: Hex }).hash ?? "—"}
+          </code>
+          {stage.kind === "infer" ? <span className="ml-2">— operator validating + running inference…</span> : null}
+        </div>
+      ) : null}
+
+      {stage.kind === "done" ? (
+        <ResultPanel result={stage.result} expectedMeasurement={agent.expectedTeeMeasurement} />
       ) : null}
     </div>
   );

@@ -93,19 +93,3 @@ export async function infer(req: InferRequest): Promise<InferResult> {
   return { ok: true, ...body };
 }
 
-/**
- * Demo-mode payment shortcut. The operator's x402 layer accepts any non-empty
- * receiptId; this builds one with a synthetic tx hash so the UI flow is
- * exercisable without Uniswap pay-with-any-token wired up. Replace with a
- * real swap+settle once the Uniswap skill is integrated.
- */
-export function buildDemoReceipt(): PaymentReceipt {
-  const random = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return {
-    txHash: `0x${random}` as `0x${string}`,
-    facilitator: "demo",
-    receiptId: `rcpt-${crypto.randomUUID()}`,
-  };
-}
