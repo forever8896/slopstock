@@ -47,8 +47,11 @@ Rules:
 - Be specific: cite the function name and line range.
 - Do not wrap the JSON in markdown.`;
 
+// Matches the value the iNFT pins at mint time (keccak(teeAttestation)). Real
+// ERC-7857 produces this from a parsed TDX/SGX quote; we emit the placeholder
+// so the subscriber-side AttestationBadge verification flow stays exercised.
 const PINNED_MEASUREMENT: `0x${string}` =
-  "0x9a3f0000000000000000000000000000000000000000000000000000000000ff";
+  "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37";
 
 class OpenAICompatibleComputeClient implements ComputeClient {
   constructor(private readonly config: OperatorConfig) {}

@@ -115,8 +115,12 @@ contract StratumAgentNFT is ERC721, Ownable, IAgentNFT {
     }
 
     /// @inheritdoc IAgentNFT
+    /// @dev Owner or any approved operator (per ERC-721 approval semantics) may
+    ///      grant usage. This lets a delegated operator key — e.g. the Stratum
+    ///      operator node — issue subscriber grants after validating an x402
+    ///      payment, without exposing the iNFT owner's keys to the box.
     function authorizeUsage(uint256 tokenId, address user, uint64 expiresAt) external {
-        if (_ownerOf(tokenId) != msg.sender) revert NotOwnerOrApproved();
+        _checkApprovedOrOwner(tokenId);
         _grantedAtVersion[tokenId][user] = usageVersion[tokenId];
         _grantExpiresAt[tokenId][user] = expiresAt;
         emit UsageAuthorized(tokenId, user, expiresAt);
@@ -124,10 +128,23 @@ contract StratumAgentNFT is ERC721, Ownable, IAgentNFT {
 
     /// @inheritdoc IAgentNFT
     function revokeUsage(uint256 tokenId, address user) external {
-        if (_ownerOf(tokenId) != msg.sender) revert NotOwnerOrApproved();
+        _checkApprovedOrOwner(tokenId);
         delete _grantedAtVersion[tokenId][user];
         delete _grantExpiresAt[tokenId][user];
         emit UsageRevoked(tokenId, user);
+    }
+
+    /// @dev msg.sender must be the owner of `tokenId`, an account
+    ///      `setApprovalForAll`'d by the owner, or the per-token approved address.
+    function _checkApprovedOrOwner(uint256 tokenId) internal view {
+        address owner = _ownerOf(tokenId);
+        if (
+            msg.sender != owner
+                && !isApprovedForAll(owner, msg.sender)
+                && getApproved(tokenId) != msg.sender
+        ) {
+            revert NotOwnerOrApproved();
+        }
     }
 
     /// @inheritdoc IAgentNFT

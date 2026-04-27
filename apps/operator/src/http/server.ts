@@ -19,6 +19,7 @@
  * CORS is permissive so the dev frontend can hit this directly.
  */
 
+import { agentNftAbi } from "../chain/abis.ts";
 import type { Clients } from "../chain/clients.ts";
 import type { ComputeClient } from "../compute/client.ts";
 import { ComputeError } from "../compute/client.ts";
@@ -154,6 +155,11 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const tokenId = typeof body.tokenId === "string" ? BigInt(body.tokenId) : BigInt(body.tokenId);
   const callId = crypto.randomUUID();
 
+  // Issue the on-chain authorizeUsage grant in parallel with the LLM call.
+  // Best-effort: if the operator isn't approvedForAll yet (not unusual in
+  // bootstrap), the inference still succeeds and we log the failure.
+  const grantPromise = grantUsage(deps, tokenId, body.subscriber);
+
   let compute;
   try {
     compute = await deps.compute.runInference({
@@ -179,5 +185,37 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   );
   recordReceipt(inferenceReceipt);
 
-  return json({ callId, output: compute.output, receipt: inferenceReceipt });
+  // Surface grant outcome on the receipt (informational; not signed by TEE).
+  const grantTx = await grantPromise;
+
+  return json({ callId, output: compute.output, receipt: inferenceReceipt, authorizeUsageTx: grantTx });
+}
+
+/**
+ * Grant the subscriber an on-chain authorizeUsage license for 1 hour. Operator
+ * must be approvedForAll (or per-token approved) by the iNFT owner; if it
+ * isn't, the call reverts with NotOwnerOrApproved and we log + continue.
+ */
+async function grantUsage(
+  deps: HttpDeps,
+  tokenId: bigint,
+  subscriber: `0x${string}`,
+): Promise<`0x${string}` | null> {
+  const expiresAt = BigInt(Math.floor(Date.now() / 1000) + 3600);
+  try {
+    const hash = await deps.clients.zgWallet.writeContract({
+      account: deps.clients.account,
+      chain: deps.clients.zgWallet.chain,
+      address: deps.agentNftAddress,
+      abi: agentNftAbi,
+      functionName: "authorizeUsage",
+      args: [tokenId, subscriber, expiresAt],
+    });
+    console.log(`[operator] authorizeUsage tx ${hash} for ${subscriber} on tokenId ${tokenId}`);
+    return hash;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[operator] authorizeUsage failed (continuing): ${msg.slice(0, 200)}`);
+    return null;
+  }
 }

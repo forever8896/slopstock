@@ -28,9 +28,10 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
     modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed)",
     perCallUsdc: 1_000_000n,
     perCallHuman: "$1.00",
-    // Matches the placeholder the operator's MockComputeClient currently returns.
-    // Phase 3 swaps this for a real TEE quote measurement.
+    // The iNFT pins keccak(teeAttestation) at mint time. Operator emits the
+    // same value so the web's AttestationBadge verifies cleanly. The real
+    // ERC-7857 fork will swap this for a parsed TDX/SGX quote measurement.
     expectedTeeMeasurement:
-      "0x9a3f0000000000000000000000000000000000000000000000000000000000ff",
+      "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37",
   },
 };
