@@ -1,0 +1,11 @@
+{
+  "agentNft0g": "0x2F79b1950CcaA58259ea62bFe99107De75018D92",
+  "chainId": 84532,
+  "ipoSale": "0x2A06246eeaf9b772CD3e7B8823298c0C8E89df48",
+  "revenueVault": "0x5190f454E058319C53c82ff8bDaF0CB193CA8109",
+  "shareToken": "0x2F79b1950CcaA58259ea62bFe99107De75018D92",
+  "ticker": "AUDIT",
+  "tokenId": 1,
+  "treasury": "0x2908209845Edd4B526B9F26E3b3bba73E9A59D10",
+  "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+}

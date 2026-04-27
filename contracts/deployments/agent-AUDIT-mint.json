@@ -1,0 +1,9 @@
+{
+  "agentNft": "0x2F79b1950CcaA58259ea62bFe99107De75018D92",
+  "chainId": 16602,
+  "ensName": "auditor.stratum.eth",
+  "metadataURI": "ipfs://QmStratumAuditAgentTestnetPlaceholderHash/auditor.json",
+  "owner": "0x2908209845Edd4B526B9F26E3b3bba73E9A59D10",
+  "ticker": "AUDIT",
+  "tokenId": 1
+}
