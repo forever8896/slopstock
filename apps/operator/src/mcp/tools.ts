@@ -8,9 +8,6 @@
  *   stratum.agent.infer         The paid call. Verifies payment + on-chain
  *                                authorizeUsage, then runs Sealed Executor inference.
  *   stratum.agent.attestation   Returns a previously-emitted receipt by callId.
- *
- * Tool schemas are JSON Schema (the MCP convention). We validate with zod
- * server-side because the SDK doesn't enforce the JSON Schema for us.
  */
 
 import { z } from "zod";
@@ -20,8 +17,7 @@ import type { ComputeClient } from "../compute/client.ts";
 import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
 import { findReceipt, recordReceipt } from "../store/receipts.ts";
-import { agentNftAbi } from "../chain/abis.ts";
-import { HERO_AGENT } from "@stratum/shared";
+import { agentNftAbi, agentRegistryAbi } from "../chain/abis.ts";
 
 // ─── Input schemas ───────────────────────────────────────────────────────────
 
@@ -34,6 +30,21 @@ const inferInput = z.object({
   subscriber: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
 });
 const attestationInput = z.object({ callId: z.string().uuid() });
+
+// ─── Per-ticker offchain pricing ─────────────────────────────────────────────
+//
+// Per-call price isn't on-chain (it's an operator policy decision). Track it
+// here keyed by ticker. Web app's lib/agent-metadata.ts mirrors these values.
+
+const PRICING_BY_TICKER: Record<string, { perCallSmallest: string; perCallHuman: string; modelBase: string; description: string }> = {
+  AUDIT: {
+    perCallSmallest: "1000000", // 1 USDC at 6 decimals
+    perCallHuman: "$1.00",
+    modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed)",
+    description:
+      "Sealed Solidity audit agent. Pay 1 USDC, get a structured audit with TEE-attested provenance.",
+  },
+};
 
 // ─── Tool list (descriptors) ─────────────────────────────────────────────────
 
@@ -89,7 +100,8 @@ export interface ToolDeps {
   clients: Clients;
   compute: ComputeClient;
   receiptSigner: ReceiptSigner;
-  agentNftAddress: `0x${string}` | undefined;
+  agentNftAddress: `0x${string}`;
+  agentRegistryAddress: `0x${string}`;
 }
 
 export async function dispatch(name: string, args: unknown, deps: ToolDeps): Promise<unknown> {
@@ -113,29 +125,71 @@ function _parseTokenId(raw: number | string): bigint {
   return typeof raw === "string" ? BigInt(raw) : BigInt(raw);
 }
 
-async function handleProfile(args: z.infer<typeof profileInput>, _deps: ToolDeps) {
+export async function handleProfile(args: z.infer<typeof profileInput>, deps: ToolDeps) {
   const tokenId = _parseTokenId(args.tokenId);
-  // For demo we hard-code the hero agent profile; once AgentRegistry is deployed
-  // we read shareToken/vault from `info(tokenId)` on-chain.
+
+  const [info, ensName, measurement] = await Promise.all([
+    deps.clients.zgPublic.readContract({
+      address: deps.agentRegistryAddress,
+      abi: agentRegistryAbi,
+      functionName: "info",
+      args: [tokenId],
+    }),
+    deps.clients.zgPublic.readContract({
+      address: deps.agentNftAddress,
+      abi: agentNftAbi,
+      functionName: "ensName",
+      args: [tokenId],
+    }),
+    deps.clients.zgPublic.readContract({
+      address: deps.agentNftAddress,
+      abi: agentNftAbi,
+      functionName: "expectedMeasurement",
+      args: [tokenId],
+    }),
+  ]);
+
+  if (info.operator === "0x0000000000000000000000000000000000000000") {
+    throw new Error(`tokenId ${tokenId} not registered`);
+  }
+
+  // Derive ticker from ENS subdomain (auditor.stratum.eth → AUDIT proxy via
+  // PRICING_BY_TICKER). Falls back to UNKNOWN if no entry.
+  const guessTicker = ensName.split(".")[0]?.toUpperCase() ?? "";
+  const ticker =
+    Object.keys(PRICING_BY_TICKER).find((t) => guessTicker.startsWith(t.slice(0, 4))) ??
+    "AUDIT";
+  const pricing = PRICING_BY_TICKER[ticker]!;
+
   return {
     tokenId: tokenId.toString(),
-    name: HERO_AGENT.ens,
-    ticker: HERO_AGENT.ticker,
-    description: "Sealed Solidity audit agent.",
-    modelBase: "qwen2.5-coder-32b",
-    pricing: { perCall: "1000000", asset: "USDC.base", currency: "USDC", perCallHuman: "$1.00" },
-    expectedTeeMeasurement: "0x9a3f0000000000000000000000000000000000000000000000000000000000ff",
+    name: ensName,
+    ticker,
+    description: pricing.description,
+    modelBase: pricing.modelBase,
+    pricing: {
+      perCall: pricing.perCallSmallest,
+      asset: "USDC.base",
+      currency: "USDC",
+      perCallHuman: pricing.perCallHuman,
+    },
+    operator: info.operator,
+    shareToken: info.shareToken,
+    vaultBase: info.vaultBase,
+    ensName,
+    expectedTeeMeasurement: measurement,
   };
 }
 
-async function handleQuote(args: z.infer<typeof quoteInput>, _deps: ToolDeps) {
-  const tokenId = _parseTokenId(args.tokenId);
+export async function handleQuote(args: z.infer<typeof quoteInput>, deps: ToolDeps) {
+  const profile = await handleProfile(args, deps);
   return {
-    tokenId: tokenId.toString(),
-    price: { amount: "1000000", asset: "USDC.base" },
+    tokenId: profile.tokenId,
+    price: { amount: profile.pricing.perCall, asset: profile.pricing.asset },
     paymentEndpoint: "/x402/infer",
     paymentMethods: ["x402"],
     expiresIn: 600,
+    recipient: profile.vaultBase,
   };
 }
 
@@ -143,17 +197,14 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   const tokenId = _parseTokenId(args.tokenId);
   const subscriber = args.subscriber as `0x${string}`;
 
-  // Onchain authorization gate. Skipped if AgentNFT address is unconfigured
-  // (typical in DEMO_MODE without a deployed iNFT).
-  if (deps.agentNftAddress) {
-    const authorized = await deps.clients.zgPublic.readContract({
-      address: deps.agentNftAddress,
-      abi: agentNftAbi,
-      functionName: "isAuthorized",
-      args: [tokenId, subscriber],
-    });
-    if (!authorized) throw new Error("subscriber not authorized — pay via x402 first");
-  }
+  // Onchain authorization gate.
+  const authorized = await deps.clients.zgPublic.readContract({
+    address: deps.agentNftAddress,
+    abi: agentNftAbi,
+    functionName: "isAuthorized",
+    args: [tokenId, subscriber],
+  });
+  if (!authorized) throw new Error("subscriber not authorized — pay via x402 first");
 
   const callId = crypto.randomUUID();
   const compute = await deps.compute.runInference({
@@ -170,11 +221,7 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   );
   recordReceipt(receipt);
 
-  return {
-    callId,
-    output: compute.output,
-    receipt,
-  };
+  return { callId, output: compute.output, receipt };
 }
 
 async function handleAttestation(args: z.infer<typeof attestationInput>, _deps: ToolDeps) {

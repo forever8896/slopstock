@@ -52,6 +52,50 @@ export const agentNftAbi = [
     inputs: [{ name: "tokenId", type: "uint256" }],
     outputs: [{ name: "", type: "bytes32" }],
   },
+  {
+    type: "function",
+    name: "shareToken",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "revenueVault",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "ensName",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "string" }],
+  },
+] as const;
+
+/**
+ * Minimal ERC-20 read surface needed to validate x402 payments by decoding
+ * Transfer events emitted by the txHash on Base Sepolia.
+ */
+export const erc20Abi = [
+  {
+    type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
+  {
+    type: "event",
+    name: "Transfer",
+    inputs: [
+      { name: "from", type: "address", indexed: true },
+      { name: "to", type: "address", indexed: true },
+      { name: "value", type: "uint256", indexed: false },
+    ],
+  },
 ] as const;
 
 export const agentRegistryAbi = [

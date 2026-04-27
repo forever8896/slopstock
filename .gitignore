@@ -37,6 +37,10 @@ contracts/.gas-snapshot
 .env.*.local
 !.env.example
 
+# Operator runtime data (SQLite receipts, etc.)
+/data/
+data/receipts.db*
+
 # Logs
 *.log
 npm-debug.log*

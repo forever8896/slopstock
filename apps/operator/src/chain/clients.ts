@@ -1,19 +1,18 @@
 /**
  * Viem clients for the chains Stratum touches.
  *
- * Read paths (subscriber lookup, on-chain authorizeUsage check) use public clients.
- * Write paths (mint, authorizeUsage grants) need a wallet client; we only construct
- * one when an operator private key is present in config.
+ * Read paths use public clients. Write paths (onchain effects from x402
+ * payment / mint orchestration) use a wallet client built from
+ * OPERATOR_PRIVATE_KEY.
  */
 
 import { createPublicClient, createWalletClient, http, type Chain, type PublicClient, type WalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OperatorConfig } from "../config.ts";
 
-// 0G Galileo testnet — chain id 16601 per @stratum/shared. We declare the chain
-// inline to keep the operator self-contained; this can move to packages/sdk later.
+// 0G Galileo testnet — chain id 16602 (post-2026 reset). Inline for self-containment.
 const zgGalileo = {
-  id: 16601,
+  id: 16602,
   name: "0G Galileo",
   nativeCurrency: { decimals: 18, name: "0G", symbol: "0G" },
   rpcUrls: { default: { http: ["https://evmrpc-testnet.0g.ai"] } },
@@ -23,14 +22,15 @@ const baseSepolia = {
   id: 84_532,
   name: "Base Sepolia",
   nativeCurrency: { decimals: 18, name: "Sepolia Ether", symbol: "ETH" },
-  rpcUrls: { default: { http: ["https://sepolia.base.org"] } },
+  rpcUrls: { default: { http: ["https://base-sepolia-rpc.publicnode.com"] } },
 } as const satisfies Chain;
 
 export interface Clients {
   zgPublic: PublicClient;
   basePublic: PublicClient;
-  zgWallet?: WalletClient;
-  baseWallet?: WalletClient;
+  zgWallet: WalletClient;
+  baseWallet: WalletClient;
+  account: ReturnType<typeof privateKeyToAccount>;
 }
 
 export function buildClients(config: OperatorConfig): Clients {
@@ -43,10 +43,6 @@ export function buildClients(config: OperatorConfig): Clients {
     chain: baseSepolia,
     transport: http(config.BASE_RPC_URL),
   });
-
-  if (!config.OPERATOR_PRIVATE_KEY) {
-    return { zgPublic, basePublic };
-  }
 
   const account = privateKeyToAccount(config.OPERATOR_PRIVATE_KEY as `0x${string}`);
 
@@ -62,5 +58,5 @@ export function buildClients(config: OperatorConfig): Clients {
     transport: http(config.BASE_RPC_URL),
   });
 
-  return { zgPublic, basePublic, zgWallet, baseWallet };
+  return { zgPublic, basePublic, zgWallet, baseWallet, account };
 }

@@ -288,18 +288,19 @@ export async function loadInferences(ticker: string): Promise<InferenceLog[]> {
     const body = (await res.json()) as {
       receipts: Array<{
         callId: string;
-        request: { subscriber: Hex };
-        response: { outputHash: Hex };
+        subscriber: Hex;
+        input: Hex; // input hash (keccak of bytes)
+        outputHash: Hex;
         ts: number;
         signature: Hex;
       }>;
     };
     return body.receipts.map((r) => ({
       callId: r.callId,
-      inputHash: r.response.outputHash,
-      subscriber: r.request.subscriber,
+      inputHash: r.input,
+      subscriber: r.subscriber,
       ts: r.ts,
-      verified: r.signature.length > 2,
+      verified: typeof r.signature === "string" && r.signature.length > 2,
     }));
   } catch {
     return [];
