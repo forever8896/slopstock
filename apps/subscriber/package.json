@@ -16,7 +16,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@stratum/contracts-types": "workspace:*",
     "@stratum/sdk": "workspace:*",
-    "@stratum/shared": "workspace:*"
+    "@stratum/shared": "workspace:*",
+    "viem": "^2.21.0"
   }
 }
