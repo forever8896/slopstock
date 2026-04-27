@@ -1,13 +1,14 @@
 import { shortAddr } from "@/lib/format";
-import type { MockAgent } from "@/lib/mock";
+import type { AgentDetail } from "@/lib/agents";
 
-export function MetadataPanel({ agent }: { agent: MockAgent }) {
+export function MetadataPanel({ agent }: { agent: AgentDetail }) {
   const rows: [string, string][] = [
     ["model", agent.modelBase],
     ["tee", `Intel TDX, measurement ${shortAddr(agent.expectedTeeMeasurement, 6)}`],
-    ["iNFT", shortAddr(agent.contracts.iNFT, 6)],
-    ["share token", shortAddr(agent.contracts.shareToken, 6)],
-    ["vault", shortAddr(agent.contracts.vault, 6)],
+    ["iNFT (0G)", shortAddr(agent.contracts.iNFT, 6)],
+    ["share token (Base)", shortAddr(agent.contracts.shareToken, 6)],
+    ["vault (Base)", shortAddr(agent.contracts.vault, 6)],
+    ["IPO sale (Base)", shortAddr(agent.contracts.ipoSale, 6)],
     ["ENS", agent.ens],
   ];
 

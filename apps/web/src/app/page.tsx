@@ -1,6 +1,5 @@
 import { AgentTable } from "@/components/agent-table";
 import { MarketSummary } from "@/components/market-summary";
-import { MockBanner } from "@/components/mock-banner";
 
 export default function Home() {
   return (
@@ -14,7 +13,6 @@ export default function Home() {
         </p>
       </header>
 
-      <MockBanner />
       <MarketSummary />
       <AgentTable />
     </div>

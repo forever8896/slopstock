@@ -3,7 +3,7 @@
  */
 
 export const CHAIN_IDS = {
-  zgGalileo: 16601,
+  zgGalileo: 16602,
   baseSepolia: 84532,
   sepolia: 11155111,
 } as const;

@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { mockAgents } from "@/lib/mock";
+import { listAgents } from "@/lib/agents";
 import { formatUsdc } from "@/lib/format";
 
-export function AgentTable() {
+export async function AgentTable() {
+  const agents = await listAgents();
   return (
     <div className="panel">
       <div className="grid grid-cols-12 border-b border-border px-4 py-3 text-xs text-text-muted">
@@ -10,10 +11,10 @@ export function AgentTable() {
         <div className="col-span-4">name</div>
         <div className="col-span-2 text-right">price</div>
         <div className="col-span-2 text-right">rev / call</div>
-        <div className="col-span-2 text-right">7d revenue</div>
+        <div className="col-span-2 text-right">cumulative rev</div>
       </div>
 
-      {mockAgents.map((a) => (
+      {agents.map((a) => (
         <Link
           href={`/agent/${a.ticker}`}
           key={a.ticker}
@@ -24,9 +25,9 @@ export function AgentTable() {
             <span className="font-semibold">{a.ticker}</span>
           </div>
           <div className="col-span-4 text-text-muted">{a.ens}</div>
-          <div className="col-span-2 text-right">${formatUsdc(a.ipo.pricePerShareUsdc, 2)}</div>
-          <div className="col-span-2 text-right">{a.pricing.perCallHuman}</div>
-          <div className="col-span-2 text-right">${formatUsdc(a.revenue.last7dUsdc, 2)}</div>
+          <div className="col-span-2 text-right">${formatUsdc(a.pricePerShareUsdc, 2)}</div>
+          <div className="col-span-2 text-right">{a.perCallHuman}</div>
+          <div className="col-span-2 text-right">${formatUsdc(a.cumulativeRevenueUsdc, 2)}</div>
         </Link>
       ))}
     </div>

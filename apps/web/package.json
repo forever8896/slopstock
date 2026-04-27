@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.0",
+    "@stratum/contracts-types": "workspace:*",
     "@stratum/sdk": "workspace:*",
     "@stratum/shared": "workspace:*",
     "@tanstack/react-query": "^5.59.0",

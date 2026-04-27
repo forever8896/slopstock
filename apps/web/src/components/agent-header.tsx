@@ -1,7 +1,7 @@
 import Link from "next/link";
-import type { MockAgent } from "@/lib/mock";
+import type { AgentDetail } from "@/lib/agents";
 
-export function AgentHeader({ agent }: { agent: MockAgent }) {
+export function AgentHeader({ agent }: { agent: AgentDetail }) {
   return (
     <header className="flex items-start justify-between border-b border-border pb-4">
       <div className="space-y-1">
@@ -18,12 +18,6 @@ export function AgentHeader({ agent }: { agent: MockAgent }) {
           className="border border-border px-3 py-1.5 text-sm hover:border-accent-green hover:text-accent-green"
         >
           subscribe
-        </Link>
-        <Link
-          href={`/agent/${agent.ticker}/buy`}
-          className="border border-border px-3 py-1.5 text-sm hover:border-accent-green hover:text-accent-green"
-        >
-          buy shares
         </Link>
         <Link
           href={`/agent/${agent.ticker}/acquire`}

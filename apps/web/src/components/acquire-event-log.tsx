@@ -8,6 +8,7 @@ const kindColors: Record<EventKind, string> = {
   ens: "text-blue-400",
   result: "text-accent-green",
   info: "text-text-muted",
+  accept: "text-accent-green",
 };
 
 const kindLabel: Record<EventKind, string> = {
@@ -18,6 +19,7 @@ const kindLabel: Record<EventKind, string> = {
   ens: "EMIT  ",
   result: "RESULT",
   info: "INFO  ",
+  accept: "EMIT  ",
 };
 
 function formatTs(ts: number): string {
