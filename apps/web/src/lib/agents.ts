@@ -204,32 +204,38 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
 }
 
 /**
- * Walks all Transfer events on the ShareToken to derive current holder balances.
- * Cheap because the contract is freshly deployed and the log set is tiny.
- * Once @stratum/indexer ships, replace with a single REST call.
+ * Walks Transfer events on the ShareToken to derive current holder balances.
+ * Public RPCs cap getLogs at ~50k blocks per call, so we paginate from the
+ * agent's deploy block to head. Once @stratum/indexer ships, replace with a
+ * single REST call.
  */
 export async function loadHolders(ticker: string): Promise<Holder[]> {
   const agent = getAgent(ticker);
-
-  const logs = await basePublicClient.getLogs({
-    address: agent.shareToken,
-    event: shareTokenAbi.find(
-      (e) => e.type === "event" && e.name === "Transfer",
-    ) as never,
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
+  const transferEvent = shareTokenAbi.find(
+    (e) => e.type === "event" && e.name === "Transfer",
+  ) as never;
 
   const balances = new Map<Hex, bigint>();
-  for (const log of logs) {
-    const args = (log as unknown as { args: { from: Hex; to: Hex; value: bigint } }).args;
-    if (!args) continue;
-    const { from, to, value } = args;
-    if (from !== "0x0000000000000000000000000000000000000000") {
-      balances.set(from, (balances.get(from) ?? 0n) - value);
-    }
-    if (to !== "0x0000000000000000000000000000000000000000") {
-      balances.set(to, (balances.get(to) ?? 0n) + value);
+  const head = await basePublicClient.getBlockNumber();
+  const STEP = 45_000n; // safely under the 50k publicnode cap
+
+  for (let from = agent.baseDeployBlock; from <= head; from += STEP + 1n) {
+    const to = from + STEP > head ? head : from + STEP;
+    const logs = await basePublicClient.getLogs({
+      address: agent.shareToken,
+      event: transferEvent,
+      fromBlock: from,
+      toBlock: to,
+    });
+    for (const log of logs) {
+      const args = (log as unknown as { args: { from: Hex; to: Hex; value: bigint } }).args;
+      if (!args) continue;
+      if (args.from !== "0x0000000000000000000000000000000000000000") {
+        balances.set(args.from, (balances.get(args.from) ?? 0n) - args.value);
+      }
+      if (args.to !== "0x0000000000000000000000000000000000000000") {
+        balances.set(args.to, (balances.get(args.to) ?? 0n) + args.value);
+      }
     }
   }
 

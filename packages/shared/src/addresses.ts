@@ -26,6 +26,9 @@ export interface AgentAddresses {
   revenueVault: Hex;
   ipoSale: Hex;
   ensName: string;
+  /** Base Sepolia block at which the per-agent bundle was deployed. Used as
+   *  the lower bound for log scans (RPCs cap getLogs ranges at ~50k blocks). */
+  baseDeployBlock: bigint;
 }
 
 /**
@@ -38,6 +41,7 @@ export const BASE_SEPOLIA_AGENTS: Record<string, AgentAddresses> = {
     revenueVault: "0x5190f454E058319C53c82ff8bDaF0CB193CA8109",
     ipoSale: "0x2A06246eeaf9b772CD3e7B8823298c0C8E89df48",
     ensName: "auditor.stratum.eth",
+    baseDeployBlock: 40773611n,
   },
 };
 
