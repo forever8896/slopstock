@@ -21,18 +21,18 @@
 
 import { agentNftAbi } from "../chain/abis.ts";
 import type { Clients } from "../chain/clients.ts";
-import type { ComputeClient } from "../compute/client.ts";
-import { ComputeError } from "../compute/client.ts";
 import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
 import { handleProfile } from "../mcp/tools.ts";
+import type { AgentRuntime } from "../runtime/index.ts";
+import { RuntimeError } from "../runtime/index.ts";
 import { listReceipts, recordReceipt } from "../store/receipts.ts";
 import { build402Response, parsePaymentHeader, type PaymentChallenge, validateReceipt } from "./x402.ts";
 
 export interface HttpDeps {
   config: OperatorConfig;
   clients: Clients;
-  compute: ComputeClient;
+  runtime: AgentRuntime;
   receiptSigner: ReceiptSigner;
   vaultAddress: `0x${string}`;
   agentNftAddress: `0x${string}`;
@@ -101,7 +101,7 @@ async function handleProfileRoute(tokenIdStr: string, deps: HttpDeps): Promise<R
       {
         config: deps.config,
         clients: deps.clients,
-        compute: deps.compute,
+        runtime: deps.runtime,
         receiptSigner: deps.receiptSigner,
         agentNftAddress: deps.agentNftAddress,
         agentRegistryAddress: deps.agentRegistryAddress,
@@ -155,23 +155,24 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const tokenId = typeof body.tokenId === "string" ? BigInt(body.tokenId) : BigInt(body.tokenId);
   const callId = crypto.randomUUID();
 
-  // Issue the on-chain authorizeUsage grant in parallel with the LLM call.
-  // Best-effort: if the operator isn't approvedForAll yet (not unusual in
-  // bootstrap), the inference still succeeds and we log the failure.
+  // Issue the on-chain authorizeUsage grant in parallel with the agent task.
+  // Best-effort: if the operator isn't approvedForAll yet, the inference
+  // still succeeds; we just don't get an on-chain license written this turn.
   const grantPromise = grantUsage(deps, tokenId, body.subscriber);
 
-  let compute;
+  let taskOutput;
   try {
-    compute = await deps.compute.runInference({
+    await deps.runtime.load({ tokenId });
+    taskOutput = await deps.runtime.runTask({
       tokenId,
       subscriber: body.subscriber,
       input: body.input,
       paymentReceiptId: validation.receiptId,
     });
   } catch (err) {
-    if (err instanceof ComputeError) {
+    if (err instanceof RuntimeError) {
       return new Response(
-        JSON.stringify({ error: `compute backend unavailable: ${err.message}` }),
+        JSON.stringify({ error: `agent runtime unavailable: ${err.message}` }),
         { status: 503, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -179,16 +180,16 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   }
 
   const inferenceReceipt = await deps.receiptSigner.build(
-    compute,
+    deps.runtime.kind,
+    taskOutput,
     { tokenId, subscriber: body.subscriber, paymentReceiptId: validation.receiptId },
     callId,
   );
   recordReceipt(inferenceReceipt);
 
-  // Surface grant outcome on the receipt (informational; not signed by TEE).
   const grantTx = await grantPromise;
 
-  return json({ callId, output: compute.output, receipt: inferenceReceipt, authorizeUsageTx: grantTx });
+  return json({ callId, output: taskOutput.output, receipt: inferenceReceipt, authorizeUsageTx: grantTx });
 }
 
 /**

@@ -15,6 +15,7 @@ import { erc20Abi } from "@stratum/contracts-types";
 import { USDC_BASE_SEPOLIA } from "@stratum/shared";
 import { AttestationBadge } from "@/components/attestation-badge";
 import { AuditOutput } from "@/components/audit-output";
+import { TranscriptView } from "@/components/transcript-view";
 import type { AgentDetail } from "@/lib/agents";
 import { infer, type InferResult, type PaymentReceipt } from "@/lib/operator";
 import { sampleContracts } from "@/lib/sample-contracts";
@@ -305,6 +306,7 @@ function ResultPanel({
     <div className="space-y-4">
       <AttestationBadge receipt={result.receipt} expectedMeasurement={expectedMeasurement} />
       <AuditOutput raw={result.output} />
+      <TranscriptView receipt={result.receipt} />
       <details className="panel p-4 text-xs">
         <summary className="label cursor-pointer">raw receipt (callId {result.callId})</summary>
         <pre className="mt-3 overflow-auto whitespace-pre-wrap text-text-muted">

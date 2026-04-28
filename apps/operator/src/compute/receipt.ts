@@ -1,19 +1,24 @@
 /**
- * Build + sign InferenceReceipt objects (the canonical schema lives in
- * @stratum/shared). The operator's signing key here is intentionally separate
- * from any chain-writing key: receipt provenance is an off-chain trust signal
- * and the keys can rotate independently.
+ * Build + sign InferenceReceipt objects (canonical schema in @stratum/shared).
+ *
+ * Updated for v2 receipts: takes a full AgentTaskOutput so the receipt carries
+ * the agent's transcript, bundle delta, and skills used.
+ *
+ * Operator signing key is separate from any chain-writing key. Receipt
+ * provenance is an off-chain trust signal; the chain-pinned `measurement`
+ * inside `teeAttestation` is what subscribers verify against on-chain.
  */
 
 import { keccak256, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { InferenceReceipt } from "@stratum/shared";
+import type { AgentRuntimeKind, InferenceReceipt } from "@stratum/shared";
 import type { OperatorConfig } from "../config.ts";
-import type { InferenceResponse } from "./types.ts";
+import type { AgentTaskOutput } from "../runtime/types.ts";
 
 export interface ReceiptSigner {
   build(
-    response: InferenceResponse,
+    runtime: AgentRuntimeKind,
+    response: AgentTaskOutput,
     request: { tokenId: bigint; subscriber: `0x${string}`; paymentReceiptId: string },
     callId: string,
   ): Promise<InferenceReceipt>;
@@ -24,37 +29,40 @@ export function buildReceiptSigner(config: OperatorConfig): ReceiptSigner {
 }
 
 class EcdsaReceiptSigner implements ReceiptSigner {
-  private readonly account: ReturnType<typeof privateKeyToAccount> | undefined;
+  private readonly account: ReturnType<typeof privateKeyToAccount>;
 
   constructor(config: OperatorConfig) {
-    if (config.OPERATOR_PRIVATE_KEY) {
-      this.account = privateKeyToAccount(config.OPERATOR_PRIVATE_KEY as `0x${string}`);
-    }
+    this.account = privateKeyToAccount(config.OPERATOR_PRIVATE_KEY as `0x${string}`);
   }
 
   async build(
-    response: InferenceResponse,
+    runtime: AgentRuntimeKind,
+    response: AgentTaskOutput,
     request: { tokenId: bigint; subscriber: `0x${string}`; paymentReceiptId: string },
     callId: string,
   ): Promise<InferenceReceipt> {
-    // Receipts are bound to the operator's signing key. In production we
-    // additionally bind to the TEE attestation public key (verified separately
-    // by the subscriber); for now the operator signature is enough to prove
-    // origin, and the TEE quote in the receipt proves the model identity.
+    // The digest commits to the agent's state delta as well as the I/O — so
+    // a verifier can reject any receipt where the on-chain bundle hash
+    // doesn't match what the receipt claims the agent moved through.
     const digest = keccak256(
       toHex(
         new TextEncoder().encode(
-          [callId, request.tokenId.toString(), request.subscriber, response.outputHash, response.ts.toString()].join(
-            "|",
-          ),
+          [
+            callId,
+            request.tokenId.toString(),
+            request.subscriber,
+            response.outputHash,
+            response.stateDeltaHash,
+            response.ts.toString(),
+          ].join("|"),
         ),
       ),
     );
 
-    const signature = this.account ? await this.account.signMessage({ message: { raw: digest } }) : ("0x" as const);
+    const signature = await this.account.signMessage({ message: { raw: digest } });
 
     return {
-      schemaVersion: "stratum/receipt/v1",
+      schemaVersion: "stratum/receipt/v2",
       tokenId: Number(request.tokenId),
       subscriber: request.subscriber,
       callId,
@@ -67,6 +75,13 @@ class EcdsaReceiptSigner implements ReceiptSigner {
         measurement: response.measurement,
       },
       paymentProof: request.paymentReceiptId,
+      agentRuntime: runtime,
+      bundleHashBefore: response.bundleHashBefore,
+      bundleHashAfter: response.bundleHashAfter,
+      stateDeltaHash: response.stateDeltaHash,
+      skillsLoaded: response.skillsLoaded,
+      skillsCreated: response.skillsCreated,
+      transcript: response.transcript,
       ts: response.ts,
       signature,
     };

@@ -28,7 +28,7 @@ export function verifyReceipt(
   expectedMeasurement: `0x${string}`,
 ): VerificationLevel {
   if (!receipt) return { kind: "rejected", reason: "no receipt" };
-  if (receipt.schemaVersion !== "stratum/receipt/v1") {
+  if (receipt.schemaVersion !== "stratum/receipt/v2") {
     return { kind: "rejected", reason: `unknown schema: ${receipt.schemaVersion}` };
   }
   if (!receipt.callId) return { kind: "rejected", reason: "missing callId" };

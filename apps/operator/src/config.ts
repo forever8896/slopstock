@@ -12,10 +12,19 @@ const envSchema = z.object({
   ZG_RPC_URL: z.string().url().default("https://evmrpc-testnet.0g.ai"),
   BASE_RPC_URL: z.string().url().default("https://base-sepolia-rpc.publicnode.com"),
 
+  // Agent runtime kind. `hermes` = stateful skill-accumulating agent; `openai-compat`
+  // = single-shot LLM call. Different agents (different tokenIds) can use
+  // different runtimes — the iNFT layer is substrate-agnostic.
+  AGENT_RUNTIME: z.enum(["hermes", "openai-compat"]).default("openai-compat"),
+
+  // Per-agent state directory. HermesAgentRuntime stores skills + memory
+  // under <AGENTS_DATA_DIR>/<tokenId>/.
+  AGENTS_DATA_DIR: z.string().default("./data/agents"),
+
   // Compute backend (OpenAI-compatible HTTP). Defaults target a local Ollama
-  // server on the operator's host. Override with COMPUTE_BASE_URL +
-  // COMPUTE_API_KEY for any provider that speaks the OpenAI Chat Completions
-  // shape (Together AI, vLLM, OpenRouter, etc.).
+  // server. Both runtimes use this to talk to the LLM. Override with
+  // COMPUTE_BASE_URL + COMPUTE_API_KEY for any OpenAI-shaped provider
+  // (OpenRouter, Together, vLLM, etc.).
   COMPUTE_BASE_URL: z.string().url().default("http://127.0.0.1:11434/v1"),
   COMPUTE_API_KEY: z.string().optional(),
   COMPUTE_MODEL: z.string().default("qwen2.5-coder:7b"),

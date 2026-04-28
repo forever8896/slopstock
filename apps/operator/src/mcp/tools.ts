@@ -13,9 +13,9 @@
 import { z } from "zod";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Clients } from "../chain/clients.ts";
-import type { ComputeClient } from "../compute/client.ts";
 import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
+import type { AgentRuntime } from "../runtime/index.ts";
 import { findReceipt, recordReceipt } from "../store/receipts.ts";
 import { agentNftAbi, agentRegistryAbi } from "../chain/abis.ts";
 
@@ -98,7 +98,7 @@ export const tools: Tool[] = [
 export interface ToolDeps {
   config: OperatorConfig;
   clients: Clients;
-  compute: ComputeClient;
+  runtime: AgentRuntime;
   receiptSigner: ReceiptSigner;
   agentNftAddress: `0x${string}`;
   agentRegistryAddress: `0x${string}`;
@@ -207,7 +207,8 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   if (!authorized) throw new Error("subscriber not authorized — pay via x402 first");
 
   const callId = crypto.randomUUID();
-  const compute = await deps.compute.runInference({
+  await deps.runtime.load({ tokenId });
+  const taskOutput = await deps.runtime.runTask({
     tokenId,
     subscriber,
     input: args.input,
@@ -215,13 +216,14 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   });
 
   const receipt = await deps.receiptSigner.build(
-    compute,
+    deps.runtime.kind,
+    taskOutput,
     { tokenId, subscriber, paymentReceiptId: args.paymentReceipt },
     callId,
   );
   recordReceipt(receipt);
 
-  return { callId, output: compute.output, receipt };
+  return { callId, output: taskOutput.output, receipt };
 }
 
 async function handleAttestation(args: z.infer<typeof attestationInput>, _deps: ToolDeps) {
