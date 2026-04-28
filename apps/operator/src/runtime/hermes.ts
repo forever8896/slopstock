@@ -37,6 +37,7 @@ import { Database } from "bun:sqlite";
 import { keccak256, toHex } from "viem";
 import type { Hex } from "@stratum/shared";
 import type { AgentStep } from "@stratum/shared";
+import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { hashBundleDir, stateDeltaHash } from "./bundle.ts";
 import { measurementForToken } from "./measurement.ts";
@@ -98,8 +99,22 @@ export class HermesAgentRuntime implements AgentRuntime {
   private readonly stateByToken = new Map<string, AgentState>();
   /** Lazily-imported once the loop module is built. */
   private loop?: typeof import("./hermes-loop.ts");
+  /** Optional chain clients + peer operator URL — wired by the router so
+   *  the agent-to-agent `query_agent` tool has somewhere to send payments. */
+  private clients?: Clients;
+  private peerOperatorUrl: string;
 
-  constructor(private readonly config: OperatorConfig) {}
+  constructor(private readonly config: OperatorConfig) {
+    this.peerOperatorUrl = `http://127.0.0.1:${config.HTTP_PORT}`;
+  }
+
+  /** Called by the router after construction. The runtime is otherwise
+   *  self-contained; clients only flow in if there's a tool that needs
+   *  to make on-chain side effects. */
+  attachOperatorContext(clients: Clients, peerOperatorUrl?: string): void {
+    this.clients = clients;
+    if (peerOperatorUrl) this.peerOperatorUrl = peerOperatorUrl;
+  }
 
   async load(opts: { tokenId: bigint }): Promise<void> {
     const key = opts.tokenId.toString();
@@ -192,6 +207,8 @@ export class HermesAgentRuntime implements AgentRuntime {
       config: this.config,
       state,
       req,
+      clients: this.clients,
+      peerOperatorUrl: this.peerOperatorUrl,
     });
 
     // Compute new bundle hash AFTER the loop has had a chance to write

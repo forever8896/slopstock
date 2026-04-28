@@ -38,7 +38,7 @@ async function main() {
   const agentRegistryAddress = config.AGENT_REGISTRY_ADDRESS as `0x${string}`;
   const defaultVaultAddress = config.AGENT_VAULT_ADDRESS as `0x${string}`;
 
-  const runtimes = buildRuntimeRouter(config);
+  const runtimes = buildRuntimeRouter(config, clients);
   const receiptSigner = buildReceiptSigner(config);
   const agentInfo = buildAgentInfoCache(clients.zgPublic, agentRegistryAddress);
 

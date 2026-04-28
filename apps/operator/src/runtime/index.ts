@@ -14,6 +14,7 @@
  * HermesAgentRuntime instance because state is per-token.
  */
 
+import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import type { AgentRuntime } from "./types.ts";
 import { OpenAICompatRuntime } from "./openai-compat.ts";
@@ -33,7 +34,10 @@ class DefaultRuntimeRouter implements RuntimeRouter {
   private sharedOpenAICompat: OpenAICompatRuntime;
   private readonly hermesByToken = new Map<string, HermesAgentRuntime>();
 
-  constructor(private readonly config: OperatorConfig) {
+  constructor(
+    private readonly config: OperatorConfig,
+    private readonly clients?: Clients,
+  ) {
     this.sharedOpenAICompat = new OpenAICompatRuntime(config);
   }
 
@@ -48,6 +52,9 @@ class DefaultRuntimeRouter implements RuntimeRouter {
       let h = this.hermesByToken.get(key);
       if (!h) {
         h = new HermesAgentRuntime(this.config);
+        if (this.clients) {
+          h.attachOperatorContext(this.clients);
+        }
         this.hermesByToken.set(key, h);
       }
       rt = h;
@@ -63,8 +70,8 @@ class DefaultRuntimeRouter implements RuntimeRouter {
   }
 }
 
-export function buildRuntimeRouter(config: OperatorConfig): RuntimeRouter {
-  return new DefaultRuntimeRouter(config);
+export function buildRuntimeRouter(config: OperatorConfig, clients?: Clients): RuntimeRouter {
+  return new DefaultRuntimeRouter(config, clients);
 }
 
 export type { AgentRuntime, AgentTaskInput, AgentTaskOutput, Hex } from "./types.ts";

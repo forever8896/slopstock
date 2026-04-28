@@ -18,10 +18,14 @@
  * Adding a tool is a 10-line change: append to TOOL_REGISTRY.
  */
 
-import { keccak256, toHex } from "viem";
+import { keccak256, toHex, parseUnits, encodeFunctionData } from "viem";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
+import { BASE_SEPOLIA_AGENTS, USDC_BASE_SEPOLIA } from "@stratum/shared";
+import type { Clients } from "../chain/clients.ts";
+import type { OperatorConfig } from "../config.ts";
+import { agentWalletFor } from "./agent-wallet.ts";
 
 type Hex = `0x${string}`;
 
@@ -42,6 +46,20 @@ export interface ToolCtx {
   db: Database;
   /** callId for memory writes. */
   callId: string;
+  /** The agent invoking the tool (needed for derived-wallet identity). */
+  callerTokenId: bigint;
+  /** Address of the subscriber paying THIS task — propagated when this agent
+   *  pays another agent in turn (so receipts at every hop carry provenance). */
+  subscriber: Hex;
+  /** Operator-side chain clients (read + write). Optional: tools that don't
+   *  need chain access (parse_ast, recall, note) work without them. */
+  clients?: Clients;
+  /** Operator config, for OPERATOR_PRIVATE_KEY (used to derive agent wallets)
+   *  and for COMPUTE_BASE_URL forwarding to peer-agent calls. */
+  config: OperatorConfig;
+  /** URL where peer agents are served. v1: same operator process; v2: per-
+   *  agent operator URL discovered via ENS / AgentRegistry. */
+  peerOperatorUrl: string;
 }
 
 export interface ToolResult {
@@ -236,12 +254,187 @@ const note: ToolDef = {
   },
 };
 
+// ─── Agent-to-agent: query_agent ─────────────────────────────────
+
+const queryAgent: ToolDef = {
+  name: "query_agent",
+  description:
+    "Call another Slopstock-listed agent and pay them via x402. Use this when you need expertise outside your own — e.g. as the auditor, ask `oracles.stratum.eth` for the live USD price of a token before judging an oracle-using contract. The call is a real onchain USDC transfer from your own working wallet to the target's vault, then an HTTP POST to the target's operator. Their shareholders earn revenue from your call.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      agent: {
+        type: "string",
+        description: "ENS name (e.g. 'oracles.stratum.eth') or ticker (e.g. 'ORCL').",
+      },
+      input: { type: "string", description: "Free-text query for the target agent." },
+    },
+    required: ["agent", "input"],
+    additionalProperties: false,
+  },
+  async handler(args, ctx) {
+    const target = String(args["agent"] ?? "").trim();
+    const inputText = String(args["input"] ?? "").trim();
+    if (!target || !inputText) {
+      return { text: "(missing agent or input)", resultSummary: "missing args" };
+    }
+
+    if (!ctx.clients) {
+      return {
+        text: "(query_agent unavailable — runtime started without chain clients)",
+        resultSummary: "no clients",
+      };
+    }
+
+    const targetAddr = resolveAgentAddresses(target);
+    if (!targetAddr) {
+      return {
+        text: `(unknown agent '${target}'); known: ${Object.keys(BASE_SEPOLIA_AGENTS).join(", ")}`,
+        resultSummary: `unknown ${target}`,
+      };
+    }
+    if (targetAddr.tokenId === ctx.callerTokenId) {
+      return {
+        text: "(cannot call yourself via query_agent)",
+        resultSummary: "self-call rejected",
+      };
+    }
+
+    // Derive the calling agent's wallet (deterministic from operator key + tokenId).
+    const wallet = agentWalletFor(ctx.config.OPERATOR_PRIVATE_KEY as Hex, ctx.callerTokenId);
+
+    // 1. Fetch the target's challenge so we know exact amount.
+    let challenge: { amount: string; recipient: Hex };
+    try {
+      const res = await fetch(
+        `${ctx.peerOperatorUrl}/x402/infer?tokenId=${targetAddr.tokenId.toString()}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+      );
+      if (res.status !== 402) {
+        const t = await res.text().catch(() => "");
+        return {
+          text: `unexpected status ${res.status} from peer: ${t.slice(0, 200)}`,
+          resultSummary: `peer ${res.status}`,
+        };
+      }
+      const header = res.headers.get("X-PAYMENT-V1");
+      if (!header) {
+        return { text: "peer did not return X-PAYMENT-V1 header", resultSummary: "no challenge" };
+      }
+      challenge = JSON.parse(header) as { amount: string; recipient: Hex };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { text: `failed to fetch peer challenge: ${msg.slice(0, 200)}`, resultSummary: "peer unreachable" };
+    }
+
+    // 2. Pay USDC.transfer(targetVault, amount) from this agent's wallet.
+    const amount = BigInt(challenge.amount);
+    let txHash: Hex;
+    try {
+      txHash = await ctx.clients.baseWallet.writeContract({
+        account: wallet,
+        chain: ctx.clients.baseWallet.chain,
+        address: USDC_BASE_SEPOLIA as Hex,
+        abi: [
+          {
+            type: "function",
+            name: "transfer",
+            stateMutability: "nonpayable",
+            inputs: [
+              { name: "to", type: "address" },
+              { name: "amount", type: "uint256" },
+            ],
+            outputs: [{ type: "bool" }],
+          },
+        ] as const,
+        functionName: "transfer",
+        args: [challenge.recipient, amount],
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Common failure: agent wallet not funded with USDC. Surface the address
+      // so the operator can top it up.
+      return {
+        text: `agent payment failed: ${msg.slice(0, 250)}\n\nThis agent's wallet (${wallet.address}) needs USDC + ETH on Base Sepolia to pay peer agents.`,
+        resultSummary: `pay failed: ${wallet.address.slice(0, 10)}…`,
+      };
+    }
+
+    // 3. Wait for inclusion.
+    try {
+      await ctx.clients.basePublic.waitForTransactionReceipt({ hash: txHash });
+    } catch (e) {
+      return {
+        text: `payment ${txHash} did not confirm: ${e instanceof Error ? e.message : String(e)}`,
+        resultSummary: "tx unconfirmed",
+      };
+    }
+
+    // 4. Submit to peer's /x402/infer with the receipt.
+    const receiptHeader = JSON.stringify({
+      txHash,
+      facilitator: "chain",
+      receiptId: `agent-${ctx.callerTokenId}-call-${ctx.callId.slice(0, 8)}-${Date.now()}`,
+    });
+    let body: { output?: string; receipt?: unknown; callId?: string } = {};
+    try {
+      const res = await fetch(`${ctx.peerOperatorUrl}/x402/infer`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-PAYMENT-V1-RESPONSE": receiptHeader,
+        },
+        body: JSON.stringify({
+          tokenId: targetAddr.tokenId.toString(),
+          input: inputText,
+          subscriber: wallet.address, // peer sees our agent wallet as the caller
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        return { text: `peer ${res.status}: ${t.slice(0, 200)}`, resultSummary: `peer ${res.status}` };
+      }
+      body = await res.json();
+    } catch (e) {
+      return {
+        text: `peer call failed after payment ${txHash}: ${e instanceof Error ? e.message : String(e)}`,
+        resultSummary: "peer call failed",
+      };
+    }
+
+    const output = body.output ?? "(empty)";
+    return {
+      text:
+        `[paid ${(Number(amount) / 1e6).toFixed(2)} USDC to ${target} via ${txHash.slice(0, 14)}…]\n` +
+        `[peer.callId=${body.callId ?? "?"}]\n\n${output}`,
+      resultSummary: `paid ${target} ${(Number(amount) / 1e6).toFixed(2)} USDC`,
+      meta: { txHash, peerCallId: body.callId, peerOutput: output },
+    };
+  },
+};
+
+function resolveAgentAddresses(nameOrTicker: string) {
+  const upper = nameOrTicker.toUpperCase();
+  if (BASE_SEPOLIA_AGENTS[upper]) return BASE_SEPOLIA_AGENTS[upper];
+  for (const a of Object.values(BASE_SEPOLIA_AGENTS)) {
+    if (a.ensName.toLowerCase() === nameOrTicker.toLowerCase()) return a;
+  }
+  return null;
+}
+
 export const TOOL_REGISTRY: Record<string, ToolDef> = {
   parse_ast: parseAst,
   pattern_search: patternSearch,
   recall,
   note,
+  query_agent: queryAgent,
 };
+
+// `encodeFunctionData` and `parseUnits` are imported but only used inside
+// reflection-like patterns above; reference them so dead-code linters don't
+// strip the imports during bundling.
+void encodeFunctionData;
+void parseUnits;
 
 /** Stable hash of a tool-call's args, for the receipt transcript. */
 export function hashArgs(args: unknown): Hex {

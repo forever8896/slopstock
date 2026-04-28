@@ -21,6 +21,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentStep } from "@stratum/shared";
+import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { RuntimeError, type AgentTaskInput } from "./types.ts";
 import type { SkillDoc, parseFrontmatter as _parseFrontmatter } from "./hermes.ts";
@@ -41,6 +42,10 @@ interface RunInput {
   config: OperatorConfig;
   state: AgentStateLite;
   req: AgentTaskInput;
+  /** Optional — only present if tools need on-chain access (query_agent etc). */
+  clients?: Clients;
+  /** Where peer-agent calls go (defaults to this operator's own port). */
+  peerOperatorUrl: string;
 }
 
 interface RunResult {
@@ -83,7 +88,11 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     "Emit ONLY the final audit JSON (with `summary`, `findings`, `summaryStats`, `modelMeta` keys, and NO `tool` key). No prose, no markdown fences.",
     "",
     "── workflow ────────────────────────────────────────────────",
-    'Always call tools before claiming a finding. Suggested first turn: {"tool":"parse_ast","args":{}} to see the function/state-var inventory. Then if you suspect a known issue, call {"tool":"pattern_search","args":{"pattern_name":"reentrancy"}} (or another pattern). Cite the pattern body in your finding\'s description. Only emit the final JSON when you can either (a) name specific findings with line numbers, or (b) confidently say no real issues.',
+    'Always call tools before claiming a finding. Suggested first turn: {"tool":"parse_ast","args":{}} to see the function/state-var inventory. Then if you suspect a known issue, call {"tool":"pattern_search","args":{"pattern_name":"reentrancy"}} (or another pattern). Cite the pattern body in your finding\'s description.',
+    "",
+    'When the contract reads a price oracle (Uniswap getReserves, Chainlink, slot0, custom) and you need to judge whether the price is exploitable, call {"tool":"query_agent","args":{"agent":"oracles.stratum.eth","input":"<token pair> spot vs TWAP, is it deep enough"}} — that pays ORCL via x402 and gets you a real price-source assessment to cite. Each query_agent call costs the auditor money, so use it sparingly and only when oracle reasoning is on the critical path.',
+    "",
+    "Only emit the final JSON when you can either (a) name specific findings with line numbers, or (b) confidently say no real issues.",
     "",
     state.skills.length > 0 ? "── your accumulated skills ────────────────────────────────" : "",
     state.skills.length > 0
@@ -104,7 +113,23 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
   // Persist initial user message to memory.
   insertMessage(state.db, callId, "user", req.input.slice(0, 2000));
 
-  const toolCtx: ToolCtx = { input: req.input, agentDir: state.dir, db: state.db, callId };
+  if (!input.clients) {
+    // Without clients, query_agent can't fire — but the rest of the agent loop
+    // works fine. We construct a partial ToolCtx so type-check passes; tools
+    // that require chain access will fail-soft when invoked.
+  }
+
+  const toolCtx: ToolCtx = {
+    input: req.input,
+    agentDir: state.dir,
+    db: state.db,
+    callId,
+    callerTokenId: req.tokenId,
+    subscriber: req.subscriber,
+    clients: input.clients,
+    config,
+    peerOperatorUrl: input.peerOperatorUrl,
+  };
 
   let finalAnswer: string | null = null;
   let toolCallCount = 0;
