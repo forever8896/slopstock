@@ -1,59 +1,67 @@
 /**
- * Smoke test for the Hermes agent runtime, bypassing x402.
+ * Smoke test for the Hermes agent runtime, bypassing x402 for the
+ * caller — but exercising real x402 if the agent fires query_agent.
  *
- * Run with the operator's env loaded:
+ * Run with the operator's env loaded (and a separate operator process
+ * running on :8402 for query_agent to reach):
  *   bash -c 'set -a && . ./.env && set +a && bun run apps/operator/scripts/smoke-hermes.ts'
- *
- * Prints the transcript so we can see whether the agent is actually using
- * tools, loading skills, generating new ones, and whether the bundle hash
- * changes.
  */
 
+import { buildClients } from "../src/chain/clients.ts";
 import { loadConfig } from "../src/config.ts";
 import { HermesAgentRuntime } from "../src/runtime/hermes.ts";
 
-const SAMPLE_VAULT_WITH_REENTRANCY = `
+const SAMPLE_VAULT_USING_UNISWAP = `
 pragma solidity ^0.8.0;
 
-contract Vault {
-    mapping(address => uint256) public balances;
+interface IUniswapV2Pair {
+    function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+    function token0() external view returns (address);
+}
+
+contract LendingPool {
+    IUniswapV2Pair public immutable pair;
+    mapping(address => uint256) public collateral;
+    mapping(address => uint256) public debt;
+
+    constructor(address _pair) { pair = IUniswapV2Pair(_pair); }
 
     function deposit() external payable {
-        balances[msg.sender] += msg.value;
+        collateral[msg.sender] += msg.value;
     }
 
-    function withdraw() external {
-        uint256 amount = balances[msg.sender];
-        require(amount > 0, "no balance");
+    function priceOfEth() public view returns (uint256) {
+        // BUG: spot price from Uniswap v2 — flash-loan manipulable
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        return uint256(r1) * 1e18 / uint256(r0);
+    }
+
+    function borrow(uint256 amount) external {
+        uint256 maxBorrow = collateral[msg.sender] * priceOfEth() / 1e18 / 2;
+        require(debt[msg.sender] + amount <= maxBorrow, "undercollateralized");
+        debt[msg.sender] += amount;
         (bool ok, ) = msg.sender.call{value: amount}("");
         require(ok, "transfer failed");
-        balances[msg.sender] = 0;
-    }
-
-    function ownerWithdrawAll() external {
-        // BUG: no access control
-        payable(msg.sender).transfer(address(this).balance);
     }
 }
 `;
 
 async function main() {
   const config = { ...loadConfig(), AGENT_RUNTIME: "hermes" as const };
+  const clients = buildClients(config);
   const runtime = new HermesAgentRuntime(config);
+  runtime.attachOperatorContext(clients);
 
   const tokenId = 1n;
-  console.log(`[smoke] loading runtime for tokenId=${tokenId}`);
+  console.log(`[smoke] loading runtime for tokenId=${tokenId} (AUDIT)`);
   await runtime.load({ tokenId });
 
-  const before = await runtime.bundleHash(tokenId);
-  console.log(`[smoke] bundleHash before: ${before}`);
-
-  console.log(`[smoke] running task…`);
+  console.log(`[smoke] running task (input: a flash-loan-vulnerable lending pool)`);
   const t0 = Date.now();
   const result = await runtime.runTask({
     tokenId,
     subscriber: "0x1234567890123456789012345678901234567890",
-    input: SAMPLE_VAULT_WITH_REENTRANCY,
+    input: SAMPLE_VAULT_USING_UNISWAP,
     paymentReceiptId: "rcpt-smoke",
   });
   const elapsed = Date.now() - t0;
@@ -62,8 +70,7 @@ async function main() {
   console.log(`[smoke] model: ${result.model}`);
   console.log(`[smoke] bundleHashBefore: ${result.bundleHashBefore}`);
   console.log(`[smoke] bundleHashAfter:  ${result.bundleHashAfter}`);
-  console.log(`[smoke] stateDeltaHash:   ${result.stateDeltaHash}`);
-  console.log(`[smoke] skillsLoaded: ${JSON.stringify(result.skillsLoaded)}`);
+  console.log(`[smoke] skillsLoaded:  ${JSON.stringify(result.skillsLoaded)}`);
   console.log(`[smoke] skillsCreated: ${JSON.stringify(result.skillsCreated)}`);
   console.log(`[smoke] transcript (${result.transcript.length} steps):`);
   for (const step of result.transcript) {
@@ -76,7 +83,7 @@ async function main() {
 function describeStep(s: import("@stratum/shared").AgentStep): string {
   switch (s.kind) {
     case "llm": return `${s.model} (${s.promptTokens ?? "?"} prompt / ${s.completionTokens ?? "?"} completion)`;
-    case "tool": return `${s.tool} args=${s.argsHash.slice(0, 14)}… → ${s.resultSummary}`;
+    case "tool": return `${s.tool} → ${s.resultSummary}`;
     case "skill_load": return s.skill;
     case "skill_create": return s.skill;
     case "memory_read": return `recall("${s.query}") → ${s.resultCount}`;

@@ -17,8 +17,27 @@ export const ZG_GALILEO = {
   agentRegistry: "0xB5d78dF01Fc1969A082073f6d16acaB916FACab5" as Hex,
 } as const;
 
-/** Circle-issued USDC on Base Sepolia. */
-export const USDC_BASE_SEPOLIA: Hex = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+/**
+ * Stratum-issued TestnetUSDC on Base Sepolia.
+ *
+ * We deploy our own permissionless-mint stand-in (`contracts/src/mocks/TestnetUSDC.sol`)
+ * because Circle's testnet faucet (faucet.circle.com) requires manual captcha
+ * solving — fine for an end-user demo but blocking for agent-to-agent flows
+ * where each agent needs USDC programmatically. Anyone can `mint(addr, amount)`
+ * on this contract.
+ *
+ * Circle's testnet USDC (0x036CbD53842c5426634e7929541eC2318f3dCF7e) is still
+ * the right asset for production. The vaults are bound to that address as
+ * paymentAsset and would need redeploy to track this token instead — we
+ * accept that revenue distribution from THIS USDC won't flow into shareholder
+ * snapshots until that redeploy lands. x402 payment validation works either
+ * way (operator decodes Transfer logs against this token).
+ */
+export const USDC_BASE_SEPOLIA: Hex = "0xd44e0c3a9fa12e5c00c1714b51f4d8607962e603";
+
+/** The original Circle testnet USDC address — kept here for the eventual
+ *  vault rewire. */
+export const CIRCLE_USDC_BASE_SEPOLIA: Hex = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
 export interface AgentAddresses {
   tokenId: bigint;
