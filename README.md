@@ -13,16 +13,20 @@ Built for [ETHGlobal Open Agents](https://ethglobal.com) — April 2026. Project
 | Workstream | Status |
 |---|---|
 | Contracts | ✅ deployed on 0G Galileo + Base Sepolia, 83/83 tests green |
-| Hero agent (AUDIT) | ✅ `auditor.stratum.eth` — Hermes-pattern stateful agent (skills + memory + tool loop) |
-| Second agent (MEMER) | ✅ `memer.stratum.eth` — single-shot raw-model agent (proves framework-agnosticism) |
-| AgentRuntime protocol | ✅ substrate-agnostic interface — `hermes` and `openai-compat` adapters shipped |
-| Operator node | ✅ chain-validated x402, SQLite receipts, chain-driven /profile, onchain authorizeUsage |
-| Web frontend | ✅ reads chain directly, real Marketplace + USDC payment via wagmi, agent runtime + transcript surfaced in receipts |
+| Hero agent (AUDIT) | ✅ `auditor.stratum.eth` — Hermes-pattern stateful agent (skills + memory + tool loop + autonomous skill creation) |
+| Meme agent (MEMER) | ✅ `memer.stratum.eth` — single-shot raw-model ruggability scout |
+| Oracle agent (ORCL) | ✅ `oracles.stratum.eth` — single-shot price-source agent, designed to be **called by other agents** |
+| AgentRuntime protocol | ✅ substrate-agnostic interface — `hermes` + `openai-compat` adapters shipped |
+| Multi-agent operator | ✅ one operator process serves all three agents on different runtimes simultaneously |
+| **Agent-to-agent x402** | ✅ **AUDIT pays ORCL on chain** ([txHash](https://sepolia.basescan.org/tx/0x79c7771d2eab5f54d30b0d2c2b53831e80957df58a331b457d94d122c4feeb72), block 40820457). The agent economy thesis literally working. |
+| Operator node | ✅ chain-validated x402, SQLite receipts, chain-driven /profile, onchain authorizeUsage, per-tokenId runtime + vault routing |
+| Web frontend | ✅ reads chain directly, real Marketplace + USDC payment via wagmi, agent runtime + transcript + skill diff surfaced in receipts |
 | Subscriber CLI | ✅ `discover` / `profile` / `infer` against real chain + operator |
 | Indexer (Ponder) | ⏭ deferred — on-the-fly Transfer-walk works for v1 |
 | ENS gateway worker | ⏭ deferred — needs Cloudflare deploy + ENS ownership |
 | 0G Compute Sealed Executor | ⏭ deferred — auth model not public; Ollama stand-in (any OpenAI-compat endpoint plugs in) |
 | AXL P2P transport | ⏭ deferred — sponsor surface |
+| Live revenue distribution | ⏭ deferred — vaults are immutably bound to Circle USDC; we use TestnetUSDC for x402 to enable programmatic agent-to-agent. Distribution unblocks once a vault redeploy points at TestnetUSDC, or once subscribers fund vaults with Circle USDC manually. |
 
 ## Live deployments
 
@@ -46,7 +50,11 @@ Built for [ETHGlobal Open Agents](https://ethglobal.com) — April 2026. Project
 | MEMER | ShareToken | `0x1F2147265b104DE7b5f2C496cD19817cD8659e98` |
 | MEMER | RevenueVault | `0x0f33F116992C6C470BB3bD7cC72Cf6891c84b1d5` |
 | MEMER | IPOSale | `0x4a0a6166105e90490EF9918019712d24252c0A5A` |
-| — | Payment asset (Circle USDC) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| ORCL | ShareToken | `0xa45823362dDE120B83BFe565dcB6bE42DF49c6D2` |
+| ORCL | RevenueVault | `0xE8e3b5384cd6ac4e882B9eaB9D9181eCE535C734` |
+| ORCL | IPOSale | `0x6Cf139016A35Bf76e052a5B9a282194bAB110324` |
+| — | TestnetUSDC (x402 + agent-to-agent) | `0xd44e0c3a9fa12e5c00c1714b51f4d8607962e603` |
+| — | Circle testnet USDC (vault asset) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 Artifacts at [`contracts/deployments/`](contracts/deployments/).
 
@@ -207,7 +215,38 @@ Quick ruggability check for meme-token contracts. **`openai-compat` runtime**: s
 - **Cost:** 0.50 USDC per check
 - **Output:** 1–10 ruggability rating with rationale
 
-The two agents prove the same point: Slopstock isn't tied to any one agentic framework. The `AgentRuntime` interface (load / runTask / bundleHash) is the boundary; today we ship Hermes-pattern and openai-compat adapters; tomorrow OpenClaw, IronClaw, ZeroClaw, Hermes upstream, custom builds — they all plug in identically.
+### `oracles.stratum.eth` (ticker ORCL, tokenId 3)
+
+Price-source agent. **Designed to be called by other agents.** When AUDIT is auditing a contract that reads a Uniswap reserve or Chainlink feed and needs to know whether the price is reliable, AUDIT's loop fires `query_agent("oracles.stratum.eth", ...)` — that pays ORCL **0.10 USDC via the same x402 flow subscribers use**, gets a JSON price-source assessment back, and cites it in the finding. ORCL's shareholders earn revenue from AUDIT's revenue.
+
+- **Cost:** 0.10 USDC per call
+- **Output:** `{ symbol, priceUsd, source, confidence, asOf, rationale }`
+- **Designed substrate:** raw-model fast responses for low-latency inter-agent calls
+
+### Agent economy proof — on chain
+
+The three agents above all sit on the **same iNFT protocol** (different runtimes), and they **transact with each other in real USDC**:
+
+```
+  Subscriber  ─USDC→  AUDIT vault  ─→ AUDIT runs Hermes loop
+                                       │
+                                       │ (during the audit, decides "I need a price oracle assessment")
+                                       ▼
+                                     query_agent("oracles.stratum.eth", "WETH/USDC TWAP reliability")
+                                       │
+                                       │  USDC.transfer(0.10) from AUDIT working wallet → ORCL vault
+                                       │  block 40820457 on Base Sepolia
+                                       │  txHash 0x79c7…eb72
+                                       ▼
+                                     ORCL runs (raw-model), returns JSON price assessment
+                                       │
+                                       ▼
+                                     AUDIT cites ORCL's response in the finding,
+                                     ORCL's shareholders just earned revenue,
+                                     transcript records the inter-agent call
+```
+
+Three agents on three different runtimes, transacting via the same chain primitives. That's a stock exchange of productive AI workers. The `AgentRuntime` interface (load / runTask / bundleHash) is the boundary; today we ship Hermes-pattern and openai-compat adapters; tomorrow OpenClaw, IronClaw, ZeroClaw, Hermes upstream, custom builds — they all plug in identically.
 
 ## Documentation
 
