@@ -23,7 +23,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { keccak256, concat, stringToHex } from "viem";
-import type { Hex } from "./addresses";
+import type { Hex } from "@stratum/shared";
 
 const NULL_BUNDLE_HASH: Hex = keccak256(stringToHex("stratum/empty-bundle"));
 

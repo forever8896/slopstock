@@ -26,6 +26,7 @@ export interface AgentSummary {
   pricePerShareUsdc: bigint;
   cumulativeRevenueUsdc: bigint;
   callsToday: number;
+  runtime: "hermes" | "openai-compat";
 }
 
 export interface AgentDetail extends AgentSummary {
@@ -106,6 +107,7 @@ export async function loadAgentSummary(ticker: string): Promise<AgentSummary> {
     pricePerShareUsdc,
     cumulativeRevenueUsdc,
     callsToday,
+    runtime: agent.runtime,
   };
 }
 

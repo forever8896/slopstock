@@ -9,8 +9,5 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "viem": "^2.21.0"
   }
 }

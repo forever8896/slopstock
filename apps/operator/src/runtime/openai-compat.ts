@@ -15,6 +15,7 @@
 import { keccak256, toHex } from "viem";
 import type { OperatorConfig } from "../config.ts";
 import type { AgentStep } from "@stratum/shared";
+import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput, type Hex } from "./types.ts";
 
 const SYSTEM_PROMPT = `You are an expert Solidity security auditor. Given a Solidity contract, you produce a JSON audit report — and ONLY a JSON object, no prose, no markdown fences.
@@ -41,9 +42,6 @@ Rules:
 - If you find no issues, return findings=[] and a clear summary.
 - Be specific: cite the function name and line range.
 - Do not wrap the JSON in markdown.`;
-
-const PINNED_MEASUREMENT: Hex =
-  "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37";
 
 export class OpenAICompatRuntime implements AgentRuntime {
   readonly kind = "openai-compat" as const;
@@ -126,9 +124,9 @@ export class OpenAICompatRuntime implements AgentRuntime {
       stateDeltaHash,
       skillsLoaded: [],
       skillsCreated: [],
-      measurement: PINNED_MEASUREMENT,
+      measurement: measurementForToken(req.tokenId),
       teeQuote: Buffer.from(
-        `stratum-testnet-no-tee-quote:runtime=openai-compat:model=${this.config.COMPUTE_MODEL}:ts=${Date.now()}`,
+        `stratum-testnet-no-tee-quote:runtime=openai-compat:tokenId=${req.tokenId}:model=${this.config.COMPUTE_MODEL}:ts=${Date.now()}`,
       ).toString("base64"),
       teeVendor: "intel-tdx",
       model: json.model ?? this.config.COMPUTE_MODEL,

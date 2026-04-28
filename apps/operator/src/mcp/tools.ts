@@ -40,9 +40,16 @@ const PRICING_BY_TICKER: Record<string, { perCallSmallest: string; perCallHuman:
   AUDIT: {
     perCallSmallest: "1000000", // 1 USDC at 6 decimals
     perCallHuman: "$1.00",
-    modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed)",
+    modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed) — Hermes pattern",
     description:
-      "Sealed Solidity audit agent. Pay 1 USDC, get a structured audit with TEE-attested provenance.",
+      "Sealed Solidity audit agent. Pay 1 USDC, get a structured audit with TEE-attested provenance. Hermes-pattern runtime — tools, persistent memory, autonomous skill creation.",
+  },
+  MEMER: {
+    perCallSmallest: "500000", // 0.5 USDC
+    perCallHuman: "$0.50",
+    modelBase: "qwen2.5-coder-7b (raw) — openai-compat runtime",
+    description:
+      "Quick ruggability check for meme-token contracts. Single-shot raw-model agent — no tools, no memory.",
   },
 };
 

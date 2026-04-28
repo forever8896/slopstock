@@ -24,8 +24,8 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
   AUDIT: {
     name: "auditor",
     description:
-      "Sealed Solidity audit agent. Pay 1 USDC, get a structured audit with TEE-attested provenance.",
-    modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed)",
+      "Sealed Solidity audit agent. Pay 1 USDC, get a structured audit with TEE-attested provenance. Hermes-pattern runtime — tools, persistent memory, autonomous skill creation.",
+    modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed) — Hermes pattern",
     perCallUsdc: 1_000_000n,
     perCallHuman: "$1.00",
     // The iNFT pins keccak(teeAttestation) at mint time. Operator emits the
@@ -33,5 +33,15 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
     // ERC-7857 fork will swap this for a parsed TDX/SGX quote measurement.
     expectedTeeMeasurement:
       "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37",
+  },
+  MEMER: {
+    name: "memer",
+    description:
+      "Quick ruggability check for meme-token contracts. Single-shot raw-model agent — no tools, no memory. Pay $0.50, get a 1–10 rating with rationale.",
+    modelBase: "qwen2.5-coder-7b (raw) — openai-compat runtime",
+    perCallUsdc: 500_000n,
+    perCallHuman: "$0.50",
+    expectedTeeMeasurement:
+      "0xcbb4e6f9d3c522ae5180e5390e3e0432694be771eaf76c8b7a5ebf9f26ce299d",
   },
 };

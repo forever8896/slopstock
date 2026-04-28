@@ -12,14 +12,16 @@ Built for [ETHGlobal Open Agents](https://ethglobal.com) — April 2026. Project
 
 | Workstream | Status |
 |---|---|
-| Contracts | ✅ deployed on 0G Galileo + Base Sepolia, 71/71 tests green |
-| Hero agent | ✅ `auditor.stratum.eth` minted as tokenId 1, 1M AUDIT shares, IPO live |
-| Operator node | ✅ real LLM (Ollama-first), chain-validated x402, SQLite receipts, chain-driven /profile, **onchain authorizeUsage write after payment** |
-| Web frontend | ✅ reads chain directly, real Marketplace + USDC payment via wagmi |
+| Contracts | ✅ deployed on 0G Galileo + Base Sepolia, 83/83 tests green |
+| Hero agent (AUDIT) | ✅ `auditor.stratum.eth` — Hermes-pattern stateful agent (skills + memory + tool loop) |
+| Second agent (MEMER) | ✅ `memer.stratum.eth` — single-shot raw-model agent (proves framework-agnosticism) |
+| AgentRuntime protocol | ✅ substrate-agnostic interface — `hermes` and `openai-compat` adapters shipped |
+| Operator node | ✅ chain-validated x402, SQLite receipts, chain-driven /profile, onchain authorizeUsage |
+| Web frontend | ✅ reads chain directly, real Marketplace + USDC payment via wagmi, agent runtime + transcript surfaced in receipts |
 | Subscriber CLI | ✅ `discover` / `profile` / `infer` against real chain + operator |
 | Indexer (Ponder) | ⏭ deferred — on-the-fly Transfer-walk works for v1 |
 | ENS gateway worker | ⏭ deferred — needs Cloudflare deploy + ENS ownership |
-| 0G Compute Sealed Executor | ⏭ deferred — auth model not public; Ollama stand-in |
+| 0G Compute Sealed Executor | ⏭ deferred — auth model not public; Ollama stand-in (any OpenAI-compat endpoint plugs in) |
 | AXL P2P transport | ⏭ deferred — sponsor surface |
 
 ## Live deployments
@@ -34,14 +36,17 @@ Built for [ETHGlobal Open Agents](https://ethglobal.com) — April 2026. Project
 | Fractionalizer | `0x4a0a6166105e90490EF9918019712d24252c0A5A` |
 | AgentRegistry | `0xB5d78dF01Fc1969A082073f6d16acaB916FACab5` |
 
-**Base Sepolia** (chain id 84532) — per-agent bundle for **AUDIT**
+**Base Sepolia** (chain id 84532) — per-agent bundles
 
-| Contract | Address |
-|---|---|
-| ShareToken | `0xC257DEe33f2a709aA72Acb4Da2f657C4eb7DC0Fa` |
-| RevenueVault | `0x01667C0D76b84d6cd63C82500141340bAf0c18ce` |
-| IPOSale | `0x4563a1F9Ba44C226bb378Ed33aC997CcB423D45d` |
-| Payment asset (Circle USDC) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Agent | Contract | Address |
+|---|---|---|
+| AUDIT | ShareToken | `0xC257DEe33f2a709aA72Acb4Da2f657C4eb7DC0Fa` |
+| AUDIT | RevenueVault | `0x01667C0D76b84d6cd63C82500141340bAf0c18ce` |
+| AUDIT | IPOSale | `0x4563a1F9Ba44C226bb378Ed33aC997CcB423D45d` |
+| MEMER | ShareToken | `0x1F2147265b104DE7b5f2C496cD19817cD8659e98` |
+| MEMER | RevenueVault | `0x0f33F116992C6C470BB3bD7cC72Cf6891c84b1d5` |
+| MEMER | IPOSale | `0x4a0a6166105e90490EF9918019712d24252c0A5A` |
+| — | Payment asset (Circle USDC) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 Artifacts at [`contracts/deployments/`](contracts/deployments/).
 
@@ -184,15 +189,25 @@ Each integration is **load-bearing** — pulling any one collapses the system to
 | **KeeperHub** | Revenue distribution workflow + ERC-8004 registration | RevenueVault.snap() ready; KeeperHub workflow YAML next |
 | **ENS** | ENSIP-25 registry, CCIP-Read rotating addresses, subnames as revocable subscriber API keys | Resolver contract built + tested; gateway worker deferred |
 
-## Hero agent
+## Agents listed today
 
-`auditor.stratum.eth` — a sealed Solidity audit agent.
+### `auditor.stratum.eth` (ticker AUDIT, tokenId 1)
 
-- **Model:** qwen2.5-coder-32b + LoRA on Code4rena reports (1.5B for local dev)
-- **Sealed in:** 0G Compute TEE Intel TDX (placeholder until SDK access)
+A sealed Solidity audit agent. **Hermes-pattern runtime**: persistent skills directory, three-layer memory (FTS5 over messages + facts + task_log), four tools (`parse_ast`, `pattern_search`, `recall`, `note`), autonomous skill creation when a task involves ≥3 tool calls. Skills accumulate across audits — the iNFT's bundle hash advances with every meaningful task, and the marketplace value tracks the agent's accumulated competence.
+
 - **Cost:** 1 USDC per audit
-- **Output:** structured JSON findings with severity, location, suggested patch
-- **Live:** tokenId 1 on 0G Galileo
+- **Seed skills:** `cei-pattern`, `owner-only-mods`, `oracle-pattern`
+- **Pattern library:** reentrancy, access-control, oracle-manipulation, integer-overflow, signature-replay
+- **Output:** structured JSON findings with severity, location, suggested patch; receipt includes the full agent transcript (tools called, skills loaded, memory ops)
+
+### `memer.stratum.eth` (ticker MEMER, tokenId 2)
+
+Quick ruggability check for meme-token contracts. **`openai-compat` runtime**: single-shot LLM call, no tools, no memory. Listed alongside AUDIT to demonstrate that the iNFT protocol is substrate-agnostic — different agents can run different runtimes against the same on-chain primitives.
+
+- **Cost:** 0.50 USDC per check
+- **Output:** 1–10 ruggability rating with rationale
+
+The two agents prove the same point: Slopstock isn't tied to any one agentic framework. The `AgentRuntime` interface (load / runTask / bundleHash) is the boundary; today we ship Hermes-pattern and openai-compat adapters; tomorrow OpenClaw, IronClaw, ZeroClaw, Hermes upstream, custom builds — they all plug in identically.
 
 ## Documentation
 

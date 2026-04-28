@@ -84,9 +84,6 @@
     "packages/shared": {
       "name": "@stratum/shared",
       "version": "0.0.1",
-      "dependencies": {
-        "viem": "^2.21.0",
-      },
     },
   },
   "packages": {

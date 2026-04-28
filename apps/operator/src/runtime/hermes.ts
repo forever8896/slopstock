@@ -35,15 +35,14 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { keccak256, toHex } from "viem";
-import { hashBundleDir, stateDeltaHash, type Hex } from "@stratum/shared";
+import type { Hex } from "@stratum/shared";
 import type { AgentStep } from "@stratum/shared";
 import type { OperatorConfig } from "../config.ts";
+import { hashBundleDir, stateDeltaHash } from "./bundle.ts";
+import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput } from "./types.ts";
 
 const SEED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../seed/agents");
-
-const PINNED_MEASUREMENT: Hex =
-  "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37";
 
 const DEFAULT_SYSTEM_PROMPT = `You are a Hermes-pattern Solidity security agent.
 
@@ -220,7 +219,7 @@ export class HermesAgentRuntime implements AgentRuntime {
       stateDeltaHash: stateDeltaHash(bundleHashBefore, bundleHashAfter),
       skillsLoaded: result.skillsLoaded,
       skillsCreated: result.skillsCreated,
-      measurement: PINNED_MEASUREMENT,
+      measurement: measurementForToken(req.tokenId),
       teeQuote: Buffer.from(
         `stratum-testnet-no-tee-quote:runtime=hermes:tokenId=${req.tokenId}:bundle=${bundleHashAfter}:ts=${Date.now()}`,
       ).toString("base64"),

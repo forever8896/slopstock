@@ -29,6 +29,10 @@ export interface AgentAddresses {
   /** Base Sepolia block at which the per-agent bundle was deployed. Used as
    *  the lower bound for log scans (RPCs cap getLogs ranges at ~50k blocks). */
   baseDeployBlock: bigint;
+  /** Which AgentRuntime adapter this agent's operator is expected to run.
+   *  The protocol layer doesn't enforce this — it's a hint to the UI and
+   *  to operators. Different agents can run different runtimes. */
+  runtime: "hermes" | "openai-compat";
 }
 
 /**
@@ -42,6 +46,16 @@ export const BASE_SEPOLIA_AGENTS: Record<string, AgentAddresses> = {
     ipoSale: "0x4563a1F9Ba44C226bb378Ed33aC997CcB423D45d",
     ensName: "auditor.stratum.eth",
     baseDeployBlock: 40776566n,
+    runtime: "hermes",
+  },
+  MEMER: {
+    tokenId: 2n,
+    shareToken: "0x1F2147265b104DE7b5f2C496cD19817cD8659e98",
+    revenueVault: "0x0f33F116992C6C470BB3bD7cC72Cf6891c84b1d5",
+    ipoSale: "0x4a0a6166105e90490EF9918019712d24252c0A5A",
+    ensName: "memer.stratum.eth",
+    baseDeployBlock: 40815273n,
+    runtime: "openai-compat",
   },
 };
 
