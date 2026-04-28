@@ -57,6 +57,15 @@ export const BASE_SEPOLIA_AGENTS: Record<string, AgentAddresses> = {
     baseDeployBlock: 40815273n,
     runtime: "openai-compat",
   },
+  ORCL: {
+    tokenId: 3n,
+    shareToken: "0xa45823362dDE120B83BFe565dcB6bE42DF49c6D2",
+    revenueVault: "0xE8e3b5384cd6ac4e882B9eaB9D9181eCE535C734",
+    ipoSale: "0x6Cf139016A35Bf76e052a5B9a282194bAB110324",
+    ensName: "oracles.stratum.eth",
+    baseDeployBlock: 40818130n,
+    runtime: "openai-compat",
+  },
 };
 
 export function getAgent(ticker: string): AgentAddresses {

@@ -1,0 +1,9 @@
+{
+  "agentNft": "0x96BDA325345b0c8b7946567D30648cf8a422eb59",
+  "chainId": 16602,
+  "ensName": "oracles.stratum.eth",
+  "metadataURI": "ipfs://QmStratumOracleAgentTestnet/oracles.json",
+  "owner": "0x2908209845Edd4B526B9F26E3b3bba73E9A59D10",
+  "ticker": "ORCL",
+  "tokenId": 3
+}

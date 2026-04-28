@@ -12,12 +12,12 @@
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { buildClients } from "./chain/clients.ts";
+import { buildAgentInfoCache, buildClients } from "./chain/clients.ts";
 import { buildReceiptSigner } from "./compute/receipt.ts";
 import { loadConfig } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
 import { buildMcpServer } from "./mcp/server.ts";
-import { buildAgentRuntime } from "./runtime/index.ts";
+import { buildRuntimeRouter } from "./runtime/index.ts";
 
 async function main() {
   const config = loadConfig();
@@ -25,27 +25,30 @@ async function main() {
 
   console.log("[stratum/operator] starting", {
     operator: clients.account.address,
-    runtime: config.AGENT_RUNTIME,
+    defaultRuntime: config.AGENT_RUNTIME,
+    runtimeByTokenId: config.RUNTIME_BY_TOKEN_ID,
     compute: `${config.COMPUTE_BASE_URL} (${config.COMPUTE_MODEL})`,
     agentsDataDir: config.AGENTS_DATA_DIR,
     agentNft: config.AGENT_NFT_ADDRESS,
     agentRegistry: config.AGENT_REGISTRY_ADDRESS,
-    vault: config.AGENT_VAULT_ADDRESS,
+    defaultVault: config.AGENT_VAULT_ADDRESS,
   });
-
-  const runtime = buildAgentRuntime(config);
-  const receiptSigner = buildReceiptSigner(config);
 
   const agentNftAddress = config.AGENT_NFT_ADDRESS as `0x${string}`;
   const agentRegistryAddress = config.AGENT_REGISTRY_ADDRESS as `0x${string}`;
-  const vaultAddress = config.AGENT_VAULT_ADDRESS as `0x${string}`;
+  const defaultVaultAddress = config.AGENT_VAULT_ADDRESS as `0x${string}`;
+
+  const runtimes = buildRuntimeRouter(config);
+  const receiptSigner = buildReceiptSigner(config);
+  const agentInfo = buildAgentInfoCache(clients.zgPublic, agentRegistryAddress);
 
   // 1. MCP server (stdio transport for now; AXL bridge HTTP transport TODO).
   const mcpServer = buildMcpServer({
     config,
     clients,
-    runtime,
+    runtimes,
     receiptSigner,
+    agentInfo,
     agentNftAddress,
     agentRegistryAddress,
   });
@@ -55,9 +58,10 @@ async function main() {
   const httpServer = startHttpServer({
     config,
     clients,
-    runtime,
+    runtimes,
     receiptSigner,
-    vaultAddress,
+    agentInfo,
+    defaultVaultAddress,
     agentNftAddress,
     agentRegistryAddress,
   });

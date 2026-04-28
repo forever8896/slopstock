@@ -20,21 +20,23 @@
  */
 
 import { agentNftAbi } from "../chain/abis.ts";
-import type { Clients } from "../chain/clients.ts";
+import type { AgentInfoCache, Clients } from "../chain/clients.ts";
 import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
 import { handleProfile } from "../mcp/tools.ts";
-import type { AgentRuntime } from "../runtime/index.ts";
+import type { RuntimeRouter } from "../runtime/index.ts";
 import { RuntimeError } from "../runtime/index.ts";
 import { listReceipts, recordReceipt } from "../store/receipts.ts";
+import { priceForToken } from "../runtime/pricing.ts";
 import { build402Response, parsePaymentHeader, type PaymentChallenge, validateReceipt } from "./x402.ts";
 
 export interface HttpDeps {
   config: OperatorConfig;
   clients: Clients;
-  runtime: AgentRuntime;
+  runtimes: RuntimeRouter;
   receiptSigner: ReceiptSigner;
-  vaultAddress: `0x${string}`;
+  agentInfo: AgentInfoCache;
+  defaultVaultAddress: `0x${string}`;
   agentNftAddress: `0x${string}`;
   agentRegistryAddress: `0x${string}`;
 }
@@ -101,8 +103,9 @@ async function handleProfileRoute(tokenIdStr: string, deps: HttpDeps): Promise<R
       {
         config: deps.config,
         clients: deps.clients,
-        runtime: deps.runtime,
+        runtimes: deps.runtimes,
         receiptSigner: deps.receiptSigner,
+        agentInfo: deps.agentInfo,
         agentNftAddress: deps.agentNftAddress,
         agentRegistryAddress: deps.agentRegistryAddress,
       },
@@ -127,15 +130,46 @@ function handleReceiptsRoute(url: URL, _deps: HttpDeps): Response {
 }
 
 async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
+  // Parse body first so the 402 challenge can be specific to the tokenId.
+  // We tolerate the "tokenId in query string OR body" case so callers can
+  // probe the challenge without a full body.
+  const url = new URL(req.url);
+  const queryToken = url.searchParams.get("tokenId");
+
+  let body: { tokenId?: string | number; input?: string; subscriber?: `0x${string}` } = {};
+  try {
+    if (req.headers.get("Content-Length") !== "0") {
+      body = await req.json();
+    }
+  } catch {
+    body = {};
+  }
+
+  const rawTokenId = body.tokenId ?? queryToken;
+  if (rawTokenId === undefined || rawTokenId === null) {
+    return new Response(JSON.stringify({ error: "tokenId required" }), { status: 400 });
+  }
+  const tokenId = typeof rawTokenId === "string" ? BigInt(rawTokenId) : BigInt(rawTokenId);
+
+  // Look up vault + price for this specific agent.
+  const info = await deps.agentInfo.forToken(tokenId);
+  const recipient = (info?.vaultBase ?? deps.defaultVaultAddress) as `0x${string}`;
+  const pricing = priceForToken(tokenId);
+
   const challenge: PaymentChallenge = {
     network: "base",
     asset: "USDC",
-    amount: "1000000",
-    recipient: deps.vaultAddress,
+    amount: pricing.perCallSmallest,
+    recipient,
   };
 
   const receipt = parsePaymentHeader(req.headers.get("X-PAYMENT-V1-RESPONSE"));
   if (!receipt) return build402Response(challenge);
+
+  // Need full body now for the actual inference.
+  if (!body.input || !body.subscriber) {
+    return new Response(JSON.stringify({ error: "input and subscriber required" }), { status: 400 });
+  }
 
   const validation = await validateReceipt(receipt, challenge, deps.config, deps.clients);
   if (!validation.ok) {
@@ -145,27 +179,21 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
     });
   }
 
-  let body: { tokenId: string | number; input: string; subscriber: `0x${string}` };
-  try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "invalid JSON body" }), { status: 400 });
-  }
-
-  const tokenId = typeof body.tokenId === "string" ? BigInt(body.tokenId) : BigInt(body.tokenId);
   const callId = crypto.randomUUID();
+  const subscriber = body.subscriber;
 
-  // Issue the on-chain authorizeUsage grant in parallel with the agent task.
-  // Best-effort: if the operator isn't approvedForAll yet, the inference
-  // still succeeds; we just don't get an on-chain license written this turn.
-  const grantPromise = grantUsage(deps, tokenId, body.subscriber);
+  // Onchain authorizeUsage grant in parallel with the agent task.
+  const grantPromise = grantUsage(deps, tokenId, subscriber);
+
+  // Pick the runtime for THIS agent.
+  const runtime = deps.runtimes.forToken(tokenId);
 
   let taskOutput;
   try {
-    await deps.runtime.load({ tokenId });
-    taskOutput = await deps.runtime.runTask({
+    await runtime.load({ tokenId });
+    taskOutput = await runtime.runTask({
       tokenId,
-      subscriber: body.subscriber,
+      subscriber,
       input: body.input,
       paymentReceiptId: validation.receiptId,
     });
@@ -180,9 +208,9 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   }
 
   const inferenceReceipt = await deps.receiptSigner.build(
-    deps.runtime.kind,
+    runtime.kind,
     taskOutput,
-    { tokenId, subscriber: body.subscriber, paymentReceiptId: validation.receiptId },
+    { tokenId, subscriber, paymentReceiptId: validation.receiptId },
     callId,
   );
   recordReceipt(inferenceReceipt);

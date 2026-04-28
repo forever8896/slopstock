@@ -12,10 +12,23 @@ const envSchema = z.object({
   ZG_RPC_URL: z.string().url().default("https://evmrpc-testnet.0g.ai"),
   BASE_RPC_URL: z.string().url().default("https://base-sepolia-rpc.publicnode.com"),
 
-  // Agent runtime kind. `hermes` = stateful skill-accumulating agent; `openai-compat`
-  // = single-shot LLM call. Different agents (different tokenIds) can use
-  // different runtimes — the iNFT layer is substrate-agnostic.
+  // Default agent runtime kind for tokenIds that aren't in RUNTIME_BY_TOKEN_ID.
+  // `hermes` = stateful skill-accumulating agent; `openai-compat` = single-shot.
   AGENT_RUNTIME: z.enum(["hermes", "openai-compat"]).default("openai-compat"),
+
+  // Per-tokenId runtime override. JSON: {"1":"hermes","2":"openai-compat","3":"openai-compat"}
+  // Lets one operator process serve N agents on different runtimes — the
+  // protocol layer is substrate-agnostic.
+  RUNTIME_BY_TOKEN_ID: z
+    .string()
+    .default("{}")
+    .transform((s) => {
+      try {
+        return JSON.parse(s) as Record<string, "hermes" | "openai-compat">;
+      } catch {
+        return {};
+      }
+    }),
 
   // Per-agent state directory. HermesAgentRuntime stores skills + memory
   // under <AGENTS_DATA_DIR>/<tokenId>/.
@@ -53,10 +66,9 @@ const envSchema = z.object({
   AGENT_NFT_ADDRESS: z.string().regex(hex20),
   AGENT_REGISTRY_ADDRESS: z.string().regex(hex20),
 
-  // Per-agent: the vault for x402 payments. We could read it from
-  // AgentRegistry per-tokenId, but x402 challenges happen before we know
-  // which token is being inferred against, so the operator needs a default
-  // vault for its primary agent. Single-agent operators set this at boot.
+  // Default vault for x402 payments when the request omits tokenId. With
+  // tokenId in the request body the operator looks up the vault on chain
+  // (cached) so this is mostly a fallback for legacy single-agent setups.
   AGENT_VAULT_ADDRESS: z.string().regex(hex20),
 
   // Receipt persistence.

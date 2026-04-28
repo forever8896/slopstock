@@ -12,10 +12,11 @@
 
 import { z } from "zod";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Clients } from "../chain/clients.ts";
+import type { AgentInfoCache, Clients } from "../chain/clients.ts";
 import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
-import type { AgentRuntime } from "../runtime/index.ts";
+import type { RuntimeRouter } from "../runtime/index.ts";
+import { priceForToken } from "../runtime/pricing.ts";
 import { findReceipt, recordReceipt } from "../store/receipts.ts";
 import { agentNftAbi, agentRegistryAbi } from "../chain/abis.ts";
 
@@ -31,27 +32,8 @@ const inferInput = z.object({
 });
 const attestationInput = z.object({ callId: z.string().uuid() });
 
-// ─── Per-ticker offchain pricing ─────────────────────────────────────────────
-//
-// Per-call price isn't on-chain (it's an operator policy decision). Track it
-// here keyed by ticker. Web app's lib/agent-metadata.ts mirrors these values.
-
-const PRICING_BY_TICKER: Record<string, { perCallSmallest: string; perCallHuman: string; modelBase: string; description: string }> = {
-  AUDIT: {
-    perCallSmallest: "1000000", // 1 USDC at 6 decimals
-    perCallHuman: "$1.00",
-    modelBase: "qwen2.5-coder-32b + audit-lora-v1 (sealed) — Hermes pattern",
-    description:
-      "Sealed Solidity audit agent. Pay 1 USDC, get a structured audit with TEE-attested provenance. Hermes-pattern runtime — tools, persistent memory, autonomous skill creation.",
-  },
-  MEMER: {
-    perCallSmallest: "500000", // 0.5 USDC
-    perCallHuman: "$0.50",
-    modelBase: "qwen2.5-coder-7b (raw) — openai-compat runtime",
-    description:
-      "Quick ruggability check for meme-token contracts. Single-shot raw-model agent — no tools, no memory.",
-  },
-};
+// Per-tokenId pricing lives in runtime/pricing.ts and is shared between
+// the MCP and HTTP paths.
 
 // ─── Tool list (descriptors) ─────────────────────────────────────────────────
 
@@ -105,8 +87,9 @@ export const tools: Tool[] = [
 export interface ToolDeps {
   config: OperatorConfig;
   clients: Clients;
-  runtime: AgentRuntime;
+  runtimes: RuntimeRouter;
   receiptSigner: ReceiptSigner;
+  agentInfo: AgentInfoCache;
   agentNftAddress: `0x${string}`;
   agentRegistryAddress: `0x${string}`;
 }
@@ -160,20 +143,16 @@ export async function handleProfile(args: z.infer<typeof profileInput>, deps: To
     throw new Error(`tokenId ${tokenId} not registered`);
   }
 
-  // Derive ticker from ENS subdomain (auditor.stratum.eth → AUDIT proxy via
-  // PRICING_BY_TICKER). Falls back to UNKNOWN if no entry.
-  const guessTicker = ensName.split(".")[0]?.toUpperCase() ?? "";
-  const ticker =
-    Object.keys(PRICING_BY_TICKER).find((t) => guessTicker.startsWith(t.slice(0, 4))) ??
-    "AUDIT";
-  const pricing = PRICING_BY_TICKER[ticker]!;
+  const pricing = priceForToken(tokenId);
+  const runtimeKind = deps.runtimes.forToken(tokenId).kind;
 
   return {
     tokenId: tokenId.toString(),
     name: ensName,
-    ticker,
+    ticker: pricing.ticker,
     description: pricing.description,
     modelBase: pricing.modelBase,
+    runtime: runtimeKind,
     pricing: {
       perCall: pricing.perCallSmallest,
       asset: "USDC.base",
@@ -214,8 +193,9 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   if (!authorized) throw new Error("subscriber not authorized — pay via x402 first");
 
   const callId = crypto.randomUUID();
-  await deps.runtime.load({ tokenId });
-  const taskOutput = await deps.runtime.runTask({
+  const runtime = deps.runtimes.forToken(tokenId);
+  await runtime.load({ tokenId });
+  const taskOutput = await runtime.runTask({
     tokenId,
     subscriber,
     input: args.input,
@@ -223,7 +203,7 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   });
 
   const receipt = await deps.receiptSigner.build(
-    deps.runtime.kind,
+    runtime.kind,
     taskOutput,
     { tokenId, subscriber, paymentReceiptId: args.paymentReceipt },
     callId,

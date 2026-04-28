@@ -33,6 +33,70 @@ export interface Clients {
   account: ReturnType<typeof privateKeyToAccount>;
 }
 
+export interface AgentInfoCache {
+  /** Read AgentRegistry.info(tokenId) on 0G and cache. Returns null if the
+   *  token isn't registered. */
+  forToken(tokenId: bigint): Promise<{
+    shareToken: `0x${string}`;
+    vaultBase: `0x${string}`;
+    operator: `0x${string}`;
+  } | null>;
+}
+
+export function buildAgentInfoCache(
+  zgPublic: PublicClient,
+  agentRegistryAddress: `0x${string}`,
+): AgentInfoCache {
+  const cache = new Map<string, {
+    shareToken: `0x${string}`;
+    vaultBase: `0x${string}`;
+    operator: `0x${string}`;
+  } | null>();
+
+  return {
+    async forToken(tokenId) {
+      const key = tokenId.toString();
+      if (cache.has(key)) return cache.get(key)!;
+      try {
+        const info = (await zgPublic.readContract({
+          address: agentRegistryAddress,
+          abi: [
+            {
+              type: "function",
+              name: "info",
+              stateMutability: "view",
+              inputs: [{ name: "tokenId", type: "uint256" }],
+              outputs: [
+                {
+                  type: "tuple",
+                  components: [
+                    { name: "shareToken", type: "address" },
+                    { name: "vaultBase", type: "address" },
+                    { name: "ensNameHash", type: "bytes32" },
+                    { name: "operator", type: "address" },
+                    { name: "createdAt", type: "uint64" },
+                  ],
+                },
+              ],
+            },
+          ] as const,
+          functionName: "info",
+          args: [tokenId],
+        })) as { shareToken: `0x${string}`; vaultBase: `0x${string}`; operator: `0x${string}` };
+        if (info.operator === "0x0000000000000000000000000000000000000000") {
+          cache.set(key, null);
+          return null;
+        }
+        cache.set(key, info);
+        return info;
+      } catch {
+        cache.set(key, null);
+        return null;
+      }
+    },
+  };
+}
+
 export function buildClients(config: OperatorConfig): Clients {
   const zgPublic = createPublicClient({
     chain: zgGalileo,

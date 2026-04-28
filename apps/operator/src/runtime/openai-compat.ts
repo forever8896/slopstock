@@ -13,35 +13,31 @@
  */
 
 import { keccak256, toHex } from "viem";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import type { OperatorConfig } from "../config.ts";
 import type { AgentStep } from "@stratum/shared";
 import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput, type Hex } from "./types.ts";
 
-const SYSTEM_PROMPT = `You are an expert Solidity security auditor. Given a Solidity contract, you produce a JSON audit report — and ONLY a JSON object, no prose, no markdown fences.
+const SEED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../seed/agents");
 
-Schema:
-{
-  "summary": "<one-line gist of the most important issue, or 'No high-severity issues found.'>",
-  "findings": [
-    {
-      "id": "AUDIT-NNN",
-      "severity": "HIGH" | "MEDIUM" | "LOW" | "INFORMATIONAL",
-      "title": "<short title>",
-      "location": { "file": "input.sol", "lines": [<start>, <end>] },
-      "description": "<why this is a problem, 1-3 sentences>",
-      "recommendation": "<concrete fix, 1-2 sentences>"
-    }
-  ],
-  "summaryStats": { "high": <n>, "medium": <n>, "low": <n>, "informational": <n> },
-  "modelMeta": { "model": "<model id>", "version": "stratum-audit-v1" }
+const FALLBACK_SYSTEM_PROMPT = `You are a helpful agent. Respond with concise JSON only — no prose, no markdown fences.`;
+
+/** Cache of resolved system prompts keyed by tokenId string. */
+const promptCache = new Map<string, string>();
+
+async function loadSystemPrompt(tokenId: bigint): Promise<string> {
+  const key = tokenId.toString();
+  const cached = promptCache.get(key);
+  if (cached) return cached;
+  const path = join(SEED_ROOT, key, "system.md");
+  const prompt = existsSync(path) ? await readFile(path, "utf-8") : FALLBACK_SYSTEM_PROMPT;
+  promptCache.set(key, prompt);
+  return prompt;
 }
-
-Rules:
-- Use 1-based line numbers from the input.
-- If you find no issues, return findings=[] and a clear summary.
-- Be specific: cite the function name and line range.
-- Do not wrap the JSON in markdown.`;
 
 export class OpenAICompatRuntime implements AgentRuntime {
   readonly kind = "openai-compat" as const;
@@ -62,10 +58,11 @@ export class OpenAICompatRuntime implements AgentRuntime {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.config.COMPUTE_API_KEY) headers["Authorization"] = `Bearer ${this.config.COMPUTE_API_KEY}`;
 
+    const systemPrompt = await loadSystemPrompt(req.tokenId);
     const body = {
       model: this.config.COMPUTE_MODEL,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: req.input },
       ],
       response_format: { type: "json_object" },

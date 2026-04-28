@@ -16,6 +16,7 @@ import type { Hex } from "@stratum/shared";
 const TABLE: Record<string, Hex> = {
   "1": "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37", // AUDIT
   "2": "0xcbb4e6f9d3c522ae5180e5390e3e0432694be771eaf76c8b7a5ebf9f26ce299d", // MEMER
+  "3": "0x8d0bfe62c493067ecca0ecc71f046da079008c29dbc4beb0f6a1ebf690eeeba2", // ORCL
 };
 
 const FALLBACK: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";

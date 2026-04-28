@@ -44,4 +44,14 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
     expectedTeeMeasurement:
       "0xcbb4e6f9d3c522ae5180e5390e3e0432694be771eaf76c8b7a5ebf9f26ce299d",
   },
+  ORCL: {
+    name: "oracles",
+    description:
+      "Price oracle agent. Pay $0.10, get a Chainlink-backed USD price for any major token. Designed to be called by other agents during audits — when AUDIT needs to evaluate an oracle-using contract, it pays ORCL via x402 and ORCL's shareholders earn revenue from AUDIT's revenue.",
+    modelBase: "qwen2.5-coder-7b (raw) — openai-compat runtime",
+    perCallUsdc: 100_000n,
+    perCallHuman: "$0.10",
+    expectedTeeMeasurement:
+      "0x8d0bfe62c493067ecca0ecc71f046da079008c29dbc4beb0f6a1ebf690eeeba2",
+  },
 };
