@@ -211,13 +211,28 @@ export class ZGComputeBackend implements LLMBackend {
     };
 
     // 4. Verify the signed response.
+    // SDK fetches the signature from chatId and verifies. We try several
+    // call shapes since the SDK's TS signature and JSDoc disagree on arg
+    // order, and the version we have may want a different shape.
     let isValid = false;
-    try {
-      const r = await broker.inference.processResponse(providerAddress, chatId, content);
-      isValid = r === true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[0g-compute] processResponse threw: ${msg.slice(0, 200)}`);
+    const attempts: Array<[string, () => Promise<boolean | null>]> = [
+      ["(provider, chatId)", () => broker.inference.processResponse(providerAddress, chatId)],
+      ["(provider, content)", () => broker.inference.processResponse(providerAddress, content)],
+      ["(provider, chatId, content)", () => broker.inference.processResponse(providerAddress, chatId, content)],
+      ["(provider, content, chatId)", () => broker.inference.processResponse(providerAddress, content, chatId)],
+    ];
+    for (const [label, fn] of attempts) {
+      try {
+        const r = await fn();
+        console.log(`[0g-compute] processResponse ${label} → ${r}`);
+        if (r === true) {
+          isValid = true;
+          break;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[0g-compute] processResponse ${label} threw: ${msg.slice(0, 200)}`);
+      }
     }
 
     return {
