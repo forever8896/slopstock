@@ -11,7 +11,7 @@
 
 import { keccak256, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { AgentRuntimeKind, InferenceReceipt } from "@stratum/shared";
+import type { AgentRuntimeKind, ComputeBackendKind, InferenceReceipt } from "@stratum/shared";
 import type { OperatorConfig } from "../config.ts";
 import type { AgentTaskOutput } from "../runtime/types.ts";
 
@@ -22,6 +22,10 @@ export interface ReceiptSigner {
     request: { tokenId: bigint; subscriber: `0x${string}`; paymentReceiptId: string },
     callId: string,
   ): Promise<InferenceReceipt>;
+}
+
+function computeBackendOf(att: AgentTaskOutput["backendAttestation"]): ComputeBackendKind {
+  return att.kind === "0g-tee" ? "0g-compute" : "openai-compat";
 }
 
 export function buildReceiptSigner(config: OperatorConfig): ReceiptSigner {
@@ -76,6 +80,7 @@ class EcdsaReceiptSigner implements ReceiptSigner {
       },
       paymentProof: request.paymentReceiptId,
       agentRuntime: runtime,
+      computeBackend: computeBackendOf(response.backendAttestation),
       bundleHashBefore: response.bundleHashBefore,
       bundleHashAfter: response.bundleHashAfter,
       stateDeltaHash: response.stateDeltaHash,

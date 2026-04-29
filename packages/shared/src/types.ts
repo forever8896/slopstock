@@ -45,6 +45,10 @@ export type AgentStep =
 
 export type AgentRuntimeKind = "openai-compat" | "hermes";
 
+/** Where the LLM call physically happened. Determines what `teeAttestation.quote`
+ *  carries and whether the response was signed by a TEE. */
+export type ComputeBackendKind = "openai-compat" | "0g-compute";
+
 export interface InferenceReceipt {
   schemaVersion: "stratum/receipt/v2";
   tokenId: number;
@@ -62,6 +66,10 @@ export interface InferenceReceipt {
 
   // ─── Agentic fields (v2) ────────────────────────────────────────────────
   agentRuntime: AgentRuntimeKind;
+  /** Where the LLM call ran. "0g-compute" means the response was produced
+   *  inside a TeeML-verified TEE; teeAttestation.quote carries the broker's
+   *  signed verification result. */
+  computeBackend: ComputeBackendKind;
   /** Hash of the agent's serialized state bundle BEFORE this task ran. */
   bundleHashBefore: string;      // 0x… (32 bytes)
   /** Hash of the agent's serialized state bundle AFTER this task. */

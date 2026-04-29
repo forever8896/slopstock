@@ -11,6 +11,12 @@
  * via COMPUTE_BASE_URL/COMPUTE_API_KEY/COMPUTE_MODEL).
  */
 
+// 0G testnet TEE provider endpoints serve over HTTPS with non-public CA
+// chains. Relax TLS verification BEFORE any module that does network
+// initialization is imported — must be set as early as possible in the
+// process, before fetch's TLS context is locked in.
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildAgentInfoCache, buildClients } from "./chain/clients.ts";
 import { buildReceiptSigner } from "./compute/receipt.ts";

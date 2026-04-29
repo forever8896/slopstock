@@ -144,7 +144,7 @@ export async function handleProfile(args: z.infer<typeof profileInput>, deps: To
   }
 
   const pricing = priceForToken(tokenId);
-  const runtimeKind = deps.runtimes.forToken(tokenId).kind;
+  const runtimeKind = (await deps.runtimes.forToken(tokenId)).kind;
 
   return {
     tokenId: tokenId.toString(),
@@ -193,7 +193,7 @@ async function handleInfer(args: z.infer<typeof inferInput>, deps: ToolDeps) {
   if (!authorized) throw new Error("subscriber not authorized — pay via x402 first");
 
   const callId = crypto.randomUUID();
-  const runtime = deps.runtimes.forToken(tokenId);
+  const runtime = await deps.runtimes.forToken(tokenId);
   await runtime.load({ tokenId });
   const taskOutput = await runtime.runTask({
     tokenId,

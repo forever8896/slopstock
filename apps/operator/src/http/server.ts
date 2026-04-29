@@ -186,7 +186,7 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const grantPromise = grantUsage(deps, tokenId, subscriber);
 
   // Pick the runtime for THIS agent.
-  const runtime = deps.runtimes.forToken(tokenId);
+  const runtime = await deps.runtimes.forToken(tokenId);
 
   let taskOutput;
   try {

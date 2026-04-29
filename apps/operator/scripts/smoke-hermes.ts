@@ -10,6 +10,7 @@
 import { buildClients } from "../src/chain/clients.ts";
 import { loadConfig } from "../src/config.ts";
 import { HermesAgentRuntime } from "../src/runtime/hermes.ts";
+import { OpenAICompatBackend, ZGComputeBackend, getZGBroker } from "../src/runtime/llm-backend.ts";
 
 const SAMPLE_VAULT_USING_UNISWAP = `
 pragma solidity ^0.8.0;
@@ -49,7 +50,23 @@ contract LendingPool {
 async function main() {
   const config = { ...loadConfig(), AGENT_RUNTIME: "hermes" as const };
   const clients = buildClients(config);
-  const runtime = new HermesAgentRuntime(config);
+
+  // Pick backend per env (fallback to OpenAI-compat / Ollama).
+  const backendKind = process.env["SMOKE_BACKEND"] ?? config.COMPUTE_BACKEND;
+  const backend =
+    backendKind === "0g-compute"
+      ? new ZGComputeBackend({
+          broker: await getZGBroker(config),
+          providerAddress: config.ZG_COMPUTE_PROVIDER_ADDRESS as `0x${string}`,
+        })
+      : new OpenAICompatBackend({
+          baseUrl: config.COMPUTE_BASE_URL,
+          apiKey: config.COMPUTE_API_KEY,
+          model: config.COMPUTE_MODEL,
+        });
+  console.log(`[smoke] backend: ${backend.kind} (${backend.description})`);
+
+  const runtime = new HermesAgentRuntime(config, backend);
   runtime.attachOperatorContext(clients);
 
   const tokenId = 1n;

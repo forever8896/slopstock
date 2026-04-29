@@ -1,68 +1,104 @@
 /**
- * Per-tokenId runtime routing.
+ * Per-tokenId routing for both runtime AND compute backend.
  *
- * One operator process can serve N agents, each on a potentially different
- * runtime. The router holds a Map<tokenId, AgentRuntime> and lazily
- * instantiates runtimes the first time they're requested.
+ * Two orthogonal axes:
  *
- * Selection rules (highest priority first):
- *   1. RUNTIME_BY_TOKEN_ID env, JSON like {"1":"hermes","2":"openai-compat"}
- *   2. AGENT_RUNTIME env (default fallback)
+ *   Runtime  (the layer above the LLM call):
+ *     - hermes:        stateful agent loop, tools, skills, memory
+ *     - openai-compat: single-shot LLM call wrapped in the AgentRuntime interface
  *
- * The same OpenAICompatRuntime instance is shared across all openai-compat
- * tokens (it's stateless), but each Hermes-pattern token gets its own
- * HermesAgentRuntime instance because state is per-token.
+ *   Compute backend (where the LLM call physically goes):
+ *     - openai-compat: HTTP to any OpenAI-shaped endpoint (Ollama / OpenRouter / …)
+ *     - 0g-compute:    routed through @0glabs/0g-serving-broker for sealed,
+ *                      TeeML-verified inference inside an Intel TDX (or H100/H200)
+ *                      enclave
+ *
+ * Selection per tokenId:
+ *   1. RUNTIME_BY_TOKEN_ID   env (JSON) → which runtime
+ *   2. AGENT_RUNTIME         env       → fallback runtime
+ *   3. BACKEND_BY_TOKEN_ID   env (JSON) → which backend
+ *   4. COMPUTE_BACKEND       env       → fallback backend
+ *
+ * The backend is held inside the runtime instance — Hermes runtimes are
+ * built per-tokenId (because state is per-token), each with its own
+ * (potentially different) backend. OpenAICompat runtimes are cached per-
+ * backend (the runtime itself is stateless).
  */
 
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
+import type { LLMBackend } from "./llm-backend.ts";
+import { OpenAICompatBackend, ZGComputeBackend, getZGBroker } from "./llm-backend.ts";
 import type { AgentRuntime } from "./types.ts";
 import { OpenAICompatRuntime } from "./openai-compat.ts";
 import { HermesAgentRuntime } from "./hermes.ts";
 
 export interface RuntimeRouter {
-  /** Pick the runtime for a given agent. Cached after first lookup. */
-  forToken(tokenId: bigint): AgentRuntime;
-  /** All tokenIds this router knows about explicitly (from RUNTIME_BY_TOKEN_ID).
-   *  Doesn't include the default-runtime tokens — those are discovered on demand. */
+  forToken(tokenId: bigint): Promise<AgentRuntime>;
   knownTokens(): bigint[];
 }
 
 class DefaultRuntimeRouter implements RuntimeRouter {
-  private readonly cache = new Map<string, AgentRuntime>();
-  /** Single shared openai-compat runtime — it's stateless. */
-  private sharedOpenAICompat: OpenAICompatRuntime;
-  private readonly hermesByToken = new Map<string, HermesAgentRuntime>();
+  private readonly runtimeCache = new Map<string, AgentRuntime>();
+  /** Backend instances keyed by their kind. openai-compat is shared (HTTP);
+   *  0g-compute is shared (broker singleton). */
+  private readonly backendCache = new Map<string, LLMBackend>();
 
   constructor(
     private readonly config: OperatorConfig,
     private readonly clients?: Clients,
-  ) {
-    this.sharedOpenAICompat = new OpenAICompatRuntime(config);
-  }
+  ) {}
 
-  forToken(tokenId: bigint): AgentRuntime {
+  async forToken(tokenId: bigint): Promise<AgentRuntime> {
     const key = tokenId.toString();
-    const cached = this.cache.get(key);
+    const cached = this.runtimeCache.get(key);
     if (cached) return cached;
 
-    const kind = this.config.RUNTIME_BY_TOKEN_ID[key] ?? this.config.AGENT_RUNTIME;
+    const runtimeKind =
+      this.config.RUNTIME_BY_TOKEN_ID[key] ?? this.config.AGENT_RUNTIME;
+    const backendKind =
+      this.config.BACKEND_BY_TOKEN_ID[key] ?? this.config.COMPUTE_BACKEND;
+    const backend = await this.backendFor(backendKind);
+
     let rt: AgentRuntime;
-    if (kind === "hermes") {
-      let h = this.hermesByToken.get(key);
-      if (!h) {
-        h = new HermesAgentRuntime(this.config);
-        if (this.clients) {
-          h.attachOperatorContext(this.clients);
-        }
-        this.hermesByToken.set(key, h);
-      }
+    if (runtimeKind === "hermes") {
+      const h = new HermesAgentRuntime(this.config, backend);
+      if (this.clients) h.attachOperatorContext(this.clients);
       rt = h;
     } else {
-      rt = this.sharedOpenAICompat;
+      // openai-compat runtime is stateless — share by backend kind so we
+      // don't construct one per token unnecessarily.
+      const sharedKey = `oac:${backendKind}`;
+      let r = this.runtimeCache.get(sharedKey);
+      if (!r) {
+        r = new OpenAICompatRuntime(backend);
+        this.runtimeCache.set(sharedKey, r);
+      }
+      rt = r;
     }
-    this.cache.set(key, rt);
+    this.runtimeCache.set(key, rt);
     return rt;
+  }
+
+  private async backendFor(kind: "openai-compat" | "0g-compute"): Promise<LLMBackend> {
+    const cached = this.backendCache.get(kind);
+    if (cached) return cached;
+    let backend: LLMBackend;
+    if (kind === "0g-compute") {
+      const broker = await getZGBroker(this.config);
+      backend = new ZGComputeBackend({
+        broker,
+        providerAddress: this.config.ZG_COMPUTE_PROVIDER_ADDRESS as `0x${string}`,
+      });
+    } else {
+      backend = new OpenAICompatBackend({
+        baseUrl: this.config.COMPUTE_BASE_URL,
+        apiKey: this.config.COMPUTE_API_KEY,
+        model: this.config.COMPUTE_MODEL,
+      });
+    }
+    this.backendCache.set(kind, backend);
+    return backend;
   }
 
   knownTokens(): bigint[] {

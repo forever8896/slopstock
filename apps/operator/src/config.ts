@@ -34,13 +34,38 @@ const envSchema = z.object({
   // under <AGENTS_DATA_DIR>/<tokenId>/.
   AGENTS_DATA_DIR: z.string().default("./data/agents"),
 
-  // Compute backend (OpenAI-compatible HTTP). Defaults target a local Ollama
-  // server. Both runtimes use this to talk to the LLM. Override with
-  // COMPUTE_BASE_URL + COMPUTE_API_KEY for any OpenAI-shaped provider
-  // (OpenRouter, Together, vLLM, etc.).
+  // Default LLM backend for tokenIds without a BACKEND_BY_TOKEN_ID entry.
+  //   "openai-compat" — talk to any OpenAI-shaped Chat Completions endpoint
+  //                     (Ollama, OpenRouter, Together, etc).
+  //   "0g-compute"    — route through the 0G Compute Network broker for
+  //                     TeeML-verified sealed inference.
+  COMPUTE_BACKEND: z.enum(["openai-compat", "0g-compute"]).default("openai-compat"),
+
+  // Per-tokenId backend override. JSON: {"3":"0g-compute","1":"openai-compat"}.
+  BACKEND_BY_TOKEN_ID: z
+    .string()
+    .default("{}")
+    .transform((s) => {
+      try {
+        return JSON.parse(s) as Record<string, "openai-compat" | "0g-compute">;
+      } catch {
+        return {};
+      }
+    }),
+
+  // OpenAI-compat backend config (used for tokens routed there). Defaults
+  // to a local Ollama server.
   COMPUTE_BASE_URL: z.string().url().default("http://127.0.0.1:11434/v1"),
   COMPUTE_API_KEY: z.string().optional(),
   COMPUTE_MODEL: z.string().default("qwen2.5-coder:7b"),
+
+  // 0G Compute provider (TeeML-verified). Set after running
+  // setup-0g-compute.ts. Defaults to the testnet provider published in
+  // 0g-compute-ts-starter-kit (currently serves google/gemma-3-27b-it).
+  ZG_COMPUTE_PROVIDER_ADDRESS: z
+    .string()
+    .regex(hex20)
+    .default("0x69Eb5a0BD7d0f4bF39eD5CE9Bd3376c61863aE08"),
 
   // x402 — we self-validate on chain (no facilitator dependency).
   X402_USDC_ADDRESS: z

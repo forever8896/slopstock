@@ -62,6 +62,10 @@ export interface AgentTaskOutput {
   model: string;
   /** Operator-side wall-clock timestamp. */
   ts: number;
+  /** Backend-specific attestation. Empty for OpenAI-compat HTTP; populated
+   *  with TEE provider + chatId + isValid for 0G Compute. The receipt
+   *  signer encodes this into the receipt's teeAttestation.quote field. */
+  backendAttestation: import("./llm-backend.ts").BackendAttestation;
 }
 
 export interface AgentRuntime {

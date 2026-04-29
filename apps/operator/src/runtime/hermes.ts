@@ -40,6 +40,7 @@ import type { AgentStep } from "@stratum/shared";
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { hashBundleDir, stateDeltaHash } from "./bundle.ts";
+import type { LLMBackend } from "./llm-backend.ts";
 import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput } from "./types.ts";
 
@@ -104,7 +105,10 @@ export class HermesAgentRuntime implements AgentRuntime {
   private clients?: Clients;
   private peerOperatorUrl: string;
 
-  constructor(private readonly config: OperatorConfig) {
+  constructor(
+    private readonly config: OperatorConfig,
+    private readonly backend: LLMBackend,
+  ) {
     this.peerOperatorUrl = `http://127.0.0.1:${config.HTTP_PORT}`;
   }
 
@@ -205,6 +209,7 @@ export class HermesAgentRuntime implements AgentRuntime {
     }
     const result = await this.loop.runAgentLoop({
       config: this.config,
+      backend: this.backend,
       state,
       req,
       clients: this.clients,
@@ -237,12 +242,11 @@ export class HermesAgentRuntime implements AgentRuntime {
       skillsLoaded: result.skillsLoaded,
       skillsCreated: result.skillsCreated,
       measurement: measurementForToken(req.tokenId),
-      teeQuote: Buffer.from(
-        `stratum-testnet-no-tee-quote:runtime=hermes:tokenId=${req.tokenId}:bundle=${bundleHashAfter}:ts=${Date.now()}`,
-      ).toString("base64"),
+      teeQuote: encodeBackendAttestation(result.lastAttestation, req.tokenId, bundleHashAfter),
       teeVendor: "intel-tdx",
       model: result.model,
       ts: Math.floor(Date.now() / 1000),
+      backendAttestation: result.lastAttestation,
     };
   }
 
@@ -251,6 +255,28 @@ export class HermesAgentRuntime implements AgentRuntime {
   private dirFor(tokenId: bigint): string {
     return join(this.config.AGENTS_DATA_DIR, tokenId.toString());
   }
+}
+
+/** Encode the LLM backend's attestation into the receipt's teeQuote slot. */
+function encodeBackendAttestation(
+  att: import("./llm-backend.ts").BackendAttestation,
+  tokenId: bigint,
+  bundleHash: Hex,
+): string {
+  if (att.kind === "0g-tee") {
+    return Buffer.from(
+      JSON.stringify({
+        kind: "0g-tee",
+        provider: att.provider,
+        chatId: att.chatId,
+        isValid: att.isValid,
+        bundleHash,
+      }),
+    ).toString("base64");
+  }
+  return Buffer.from(
+    `stratum-testnet-no-tee-quote:runtime=hermes:tokenId=${tokenId}:bundle=${bundleHash}:backend=${att.backend}:ts=${Date.now()}`,
+  ).toString("base64");
 }
 
 /** Read every Markdown file under <dir>/skills/, parse frontmatter. */

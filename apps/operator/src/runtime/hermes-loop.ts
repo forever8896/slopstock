@@ -23,7 +23,8 @@ import { join } from "node:path";
 import type { AgentStep } from "@stratum/shared";
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
-import { RuntimeError, type AgentTaskInput } from "./types.ts";
+import type { BackendAttestation, LLMBackend } from "./llm-backend.ts";
+import { type AgentTaskInput } from "./types.ts";
 import type { SkillDoc, parseFrontmatter as _parseFrontmatter } from "./hermes.ts";
 import { parseFrontmatter } from "./hermes.ts";
 import { TOOL_REGISTRY, hashArgs, renderToolListForPrompt, type ToolCtx } from "./hermes-tools.ts";
@@ -40,6 +41,8 @@ interface AgentStateLite {
 
 interface RunInput {
   config: OperatorConfig;
+  /** LLM backend (openai-compat or 0g-compute). All loop turns hit this. */
+  backend: LLMBackend;
   state: AgentStateLite;
   req: AgentTaskInput;
   /** Optional — only present if tools need on-chain access (query_agent etc). */
@@ -54,6 +57,10 @@ interface RunResult {
   skillsLoaded: string[];
   skillsCreated: string[];
   model: string;
+  /** Attestation from the LAST LLM call. The receipt's teeQuote is built
+   *  from this — so for hermes runs on 0G Compute, the receipt carries
+   *  the broker's verification of the final-answer turn. */
+  lastAttestation: BackendAttestation;
 }
 
 interface ChatMsg {
@@ -135,11 +142,21 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
   let finalAnswer: string | null = null;
   let toolCallCount = 0;
   let modelLast = config.COMPUTE_MODEL;
+  let lastAttestation: BackendAttestation = {
+    kind: "none",
+    backend: "openai-compat",
+    baseUrl: config.COMPUTE_BASE_URL,
+  };
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const llmStart = Math.floor(Date.now() / 1000);
-    const completion = await callLLM(config, messages);
+    const completion = await input.backend.call({
+      messages,
+      temperature: 0.1,
+      jsonMode: false,
+    });
     modelLast = completion.model;
+    lastAttestation = completion.attestation;
     transcript.push({
       kind: "llm",
       model: completion.model,
@@ -233,7 +250,7 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
   const skillsCreated: string[] = [];
   if (toolCallCount >= MIN_TOOLS_FOR_SKILL && finalAnswer) {
     try {
-      const skill = await synthesizeSkill(config, {
+      const skill = await synthesizeSkill(input.backend, {
         userInput: req.input,
         transcript,
         finalAnswer,
@@ -265,54 +282,7 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     skillsLoaded,
     skillsCreated,
     model: modelLast,
-  };
-}
-
-// ─── LLM call ─────────────────────────────────────────────────────
-
-interface LLMResult {
-  content: string;
-  model: string;
-  promptTokens?: number;
-  completionTokens?: number;
-}
-
-async function callLLM(config: OperatorConfig, messages: ChatMsg[]): Promise<LLMResult> {
-  const url = `${config.COMPUTE_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (config.COMPUTE_API_KEY) headers["Authorization"] = `Bearer ${config.COMPUTE_API_KEY}`;
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: config.COMPUTE_MODEL,
-        messages,
-        temperature: 0.1,
-        stream: false,
-      }),
-    });
-  } catch (err) {
-    throw new RuntimeError(`backend unreachable at ${url}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "<unreadable>");
-    throw new RuntimeError(`backend ${res.status}: ${text.slice(0, 400)}`);
-  }
-  const json = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    model?: string;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-  };
-  const content = json.choices?.[0]?.message?.content ?? "";
-  if (!content) throw new RuntimeError("backend returned empty content");
-  return {
-    content,
-    model: json.model ?? config.COMPUTE_MODEL,
-    promptTokens: json.usage?.prompt_tokens,
-    completionTokens: json.usage?.completion_tokens,
+    lastAttestation,
   };
 }
 
@@ -400,7 +370,7 @@ interface SkillSynthInput {
   finalAnswer: string;
 }
 
-async function synthesizeSkill(config: OperatorConfig, input: SkillSynthInput): Promise<string | null> {
+async function synthesizeSkill(backend: LLMBackend, input: SkillSynthInput): Promise<string | null> {
   // Ask the LLM to write a Markdown skill doc summarizing this audit's
   // approach. Fail-soft: if the model returns garbage, we just don't write
   // a skill this turn.
@@ -414,10 +384,15 @@ async function synthesizeSkill(config: OperatorConfig, input: SkillSynthInput): 
     `TRANSCRIPT (kinds + summaries):\n${input.transcript.map((s) => `${s.kind}: ${describeStep(s)}`).join("\n")}\n\n` +
     `FINAL FINDING SUMMARY:\n${input.finalAnswer.slice(0, 1200)}\n\n` +
     `Write the skill (frontmatter + body):`;
-  const result = await callLLM(config, [
-    { role: "system", content: sys },
-    { role: "user", content: user },
-  ]).catch(() => null);
+  const result = await backend
+    .call({
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+      temperature: 0.2,
+    })
+    .catch(() => null);
   if (!result) return null;
   const out = result.content.trim();
   if (!out.startsWith("---")) {
