@@ -39,6 +39,22 @@ export const USDC_BASE_SEPOLIA: Hex = "0xd44e0c3a9fa12e5c00c1714b51f4d8607962e60
  *  vault rewire. */
 export const CIRCLE_USDC_BASE_SEPOLIA: Hex = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
+/**
+ * Uniswap V3 contracts on Base Sepolia. Used by the subscribe page's
+ * pay-with-ETH path: subscriber sends ETH, SwapRouter02 wraps to WETH and
+ * swaps via the WETH/TestnetUSDC pool we LP'd, output goes directly to the
+ * agent's vault. One tx, real Uniswap, no operator changes (it still
+ * just sees a TestnetUSDC.Transfer to vault).
+ */
+export const UNISWAP_BASE_SEPOLIA = {
+  swapRouter02: "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4" as Hex,
+  weth: "0x4200000000000000000000000000000000000006" as Hex,
+  /** WETH/TestnetUSDC 0.3% pool (we provide the LP). */
+  pool: "0x7CA476f2d94911Ca0E52F7671a6a79ABB9222cAA" as Hex,
+  /** 0.3% fee tier. */
+  fee: 3000,
+} as const;
+
 export interface AgentAddresses {
   tokenId: bigint;
   shareToken: Hex;

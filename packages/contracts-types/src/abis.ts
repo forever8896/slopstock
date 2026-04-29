@@ -377,6 +377,49 @@ export const ipoSaleAbi = [
   },
 ] as const;
 
+/**
+ * Uniswap V3 SwapRouter02 surface used by the subscribe page's pay-with-ETH
+ * path. Just the two functions we call: exactOutputSingle (payable) and
+ * multicall + refundETH for ETH dust recovery.
+ */
+export const swapRouter02Abi = [
+  {
+    type: "function",
+    name: "exactOutputSingle",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "recipient", type: "address" },
+          { name: "amountOut", type: "uint256" },
+          { name: "amountInMaximum", type: "uint256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [{ name: "amountIn", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "multicall",
+    stateMutability: "payable",
+    inputs: [{ name: "data", type: "bytes[]" }],
+    outputs: [{ name: "results", type: "bytes[]" }],
+  },
+  {
+    type: "function",
+    name: "refundETH",
+    stateMutability: "payable",
+    inputs: [],
+    outputs: [],
+  },
+] as const;
+
 export const erc20Abi = [
   {
     type: "function",

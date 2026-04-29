@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
+  useBalance,
   useChainId,
   useReadContract,
   useSwitchChain,
@@ -11,8 +12,9 @@ import {
   useWriteContract,
 } from "wagmi";
 import { baseSepolia } from "wagmi/chains";
-import { erc20Abi } from "@stratum/contracts-types";
-import { USDC_BASE_SEPOLIA } from "@stratum/shared";
+import { encodeFunctionData, parseEther } from "viem";
+import { erc20Abi, swapRouter02Abi } from "@stratum/contracts-types";
+import { UNISWAP_BASE_SEPOLIA, USDC_BASE_SEPOLIA } from "@stratum/shared";
 import { AttestationBadge } from "@/components/attestation-badge";
 import { AuditOutput } from "@/components/audit-output";
 import { TranscriptView } from "@/components/transcript-view";
@@ -31,11 +33,17 @@ type FlowStage =
   | { kind: "idle" }
   | { kind: "preflight" }
   | { kind: "awaiting-tx" }
-  | { kind: "tx-submitted"; hash: Hex }
+  | { kind: "tx-submitted"; hash: Hex; payment: "USDC" | "ETH" }
   | { kind: "infer" }
   | { kind: "done"; result: InferResult };
 
+type PayToken = "USDC" | "ETH";
+
 const BASE_CHAIN_ID = baseSepolia.id;
+
+/** Generous max-ETH per call. With pool at ~1 WETH = 2500 USDC, 1 USDC out
+ *  costs ~0.0004 ETH. We send 0.001 ETH and refund excess via the multicall. */
+const ETH_AMOUNT_IN_MAX = parseEther("0.001");
 
 export function SubscribeClient({ agent }: Props) {
   const { address, isConnected } = useAccount();
@@ -44,13 +52,14 @@ export function SubscribeClient({ agent }: Props) {
   const onBase = chainId === BASE_CHAIN_ID;
 
   const [input, setInput] = useState("");
+  const [payToken, setPayToken] = useState<PayToken>("USDC");
   const [stage, setStage] = useState<FlowStage>({ kind: "idle" });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const subscriber: Hex = address ?? "0x0000000000000000000000000000000000000000";
 
-  // Live USDC balance on Base Sepolia.
-  const { data: usdcBalance, refetch: refetchBalance } = useReadContract({
+  // ─── Balances ─────────────────────────────────────────────────────
+  const { data: usdcBalance, refetch: refetchUsdc } = useReadContract({
     address: USDC_BASE_SEPOLIA,
     abi: erc20Abi,
     functionName: "balanceOf",
@@ -58,18 +67,23 @@ export function SubscribeClient({ agent }: Props) {
     chainId: BASE_CHAIN_ID,
     query: { enabled: Boolean(address) },
   });
+  const { data: ethBalance, refetch: refetchEth } = useBalance({
+    address,
+    chainId: BASE_CHAIN_ID,
+    query: { enabled: Boolean(address) },
+  });
 
   const price = agent.perCallUsdc;
-  const hasFunds = usdcBalance !== undefined && usdcBalance >= price;
+  const hasUsdc = usdcBalance !== undefined && usdcBalance >= price;
+  const hasEth = ethBalance !== undefined && ethBalance.value >= ETH_AMOUNT_IN_MAX;
 
-  // ─── Payment ──────────────────────────────────────────────────────
+  // ─── Tx ───────────────────────────────────────────────────────────
   const { writeContractAsync, data: txHash } = useWriteContract();
   const { isLoading: txPending, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
     chainId: BASE_CHAIN_ID,
   });
 
-  // Once the payment tx confirms, submit to operator.
   useEffect(() => {
     if (!txConfirmed || !txHash) return;
     void submitToOperator(txHash);
@@ -87,9 +101,16 @@ export function SubscribeClient({ agent }: Props) {
       return;
     }
 
-    if (!hasFunds) {
+    if (payToken === "USDC" && !hasUsdc) {
       setErrorMsg(
-        `insufficient USDC (have ${usdcBalance ? formatUsdc(usdcBalance, 2) : "0"}, need ${formatUsdc(price, 2)}). Get testnet USDC at faucet.circle.com`,
+        `insufficient USDC (have ${usdcBalance ? formatUsdc(usdcBalance, 2) : "0"}, need ${formatUsdc(price, 2)}). Or pay in ETH instead.`,
+      );
+      setStage({ kind: "idle" });
+      return;
+    }
+    if (payToken === "ETH" && !hasEth) {
+      setErrorMsg(
+        `need at least ${parseEther("0.001")} wei of ETH on Base Sepolia. Faucet: bridge.base.org/deposit (testnet)`,
       );
       setStage({ kind: "idle" });
       return;
@@ -97,14 +118,51 @@ export function SubscribeClient({ agent }: Props) {
 
     try {
       setStage({ kind: "awaiting-tx" });
-      const hash = await writeContractAsync({
-        address: USDC_BASE_SEPOLIA,
-        abi: erc20Abi,
-        functionName: "transfer",
-        args: [agent.contracts.vault, price],
-        chainId: BASE_CHAIN_ID,
-      });
-      setStage({ kind: "tx-submitted", hash });
+
+      let hash: Hex;
+      if (payToken === "USDC") {
+        // Direct USDC.transfer to vault.
+        hash = await writeContractAsync({
+          address: USDC_BASE_SEPOLIA,
+          abi: erc20Abi,
+          functionName: "transfer",
+          args: [agent.contracts.vault, price],
+          chainId: BASE_CHAIN_ID,
+        });
+      } else {
+        // Swap ETH→USDC via Uniswap V3 SwapRouter02, output goes directly to
+        // the vault. One tx: payable multicall wraps ETH, swaps, refunds dust.
+        const swapData = encodeFunctionData({
+          abi: swapRouter02Abi,
+          functionName: "exactOutputSingle",
+          args: [
+            {
+              tokenIn: UNISWAP_BASE_SEPOLIA.weth,
+              tokenOut: USDC_BASE_SEPOLIA,
+              fee: UNISWAP_BASE_SEPOLIA.fee,
+              recipient: agent.contracts.vault,
+              amountOut: price,
+              amountInMaximum: ETH_AMOUNT_IN_MAX,
+              sqrtPriceLimitX96: 0n,
+            },
+          ],
+        });
+        const refundData = encodeFunctionData({
+          abi: swapRouter02Abi,
+          functionName: "refundETH",
+          args: [],
+        });
+        hash = await writeContractAsync({
+          address: UNISWAP_BASE_SEPOLIA.swapRouter02,
+          abi: swapRouter02Abi,
+          functionName: "multicall",
+          args: [[swapData, refundData]],
+          value: ETH_AMOUNT_IN_MAX,
+          chainId: BASE_CHAIN_ID,
+        });
+      }
+
+      setStage({ kind: "tx-submitted", hash, payment: payToken });
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
       setStage({ kind: "idle" });
@@ -127,7 +185,8 @@ export function SubscribeClient({ agent }: Props) {
         paymentReceipt: receipt,
       });
       setStage({ kind: "done", result });
-      void refetchBalance();
+      void refetchUsdc();
+      void refetchEth();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
       setStage({ kind: "idle" });
@@ -137,18 +196,24 @@ export function SubscribeClient({ agent }: Props) {
   const buttonLabel = useMemo(() => {
     switch (stage.kind) {
       case "idle":
-        return `pay ${agent.perCallHuman} & run audit`;
+        return payToken === "USDC"
+          ? `pay ${agent.perCallHuman} & run audit`
+          : `pay ~0.0004 ETH & run audit`;
       case "preflight":
       case "awaiting-tx":
         return "approve in wallet…";
       case "tx-submitted":
-        return txPending ? "waiting for confirmation…" : "submitting to operator…";
+        return txPending
+          ? stage.payment === "ETH"
+            ? "swapping ETH→USDC + sending to vault…"
+            : "waiting for confirmation…"
+          : "submitting to operator…";
       case "infer":
         return "running inference…";
       case "done":
         return "run another audit";
     }
-  }, [stage, txPending, agent.perCallHuman]);
+  }, [stage, txPending, payToken, agent.perCallHuman]);
 
   function reset() {
     setStage({ kind: "idle" });
@@ -177,7 +242,7 @@ export function SubscribeClient({ agent }: Props) {
         </div>
       ) : !onBase ? (
         <div className="panel border-yellow-400 px-4 py-3 text-sm flex items-center justify-between">
-          <span>switch to Base Sepolia (chain {BASE_CHAIN_ID}) to pay USDC</span>
+          <span>switch to Base Sepolia (chain {BASE_CHAIN_ID}) to pay</span>
           <button
             onClick={() => switchChain({ chainId: BASE_CHAIN_ID })}
             className="border border-accent-green px-3 py-1.5 text-xs text-accent-green hover:bg-bg-elev"
@@ -189,32 +254,53 @@ export function SubscribeClient({ agent }: Props) {
 
       <section className="panel p-4">
         <div className="label mb-3">payment</div>
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-text-muted">pay with</span>
-            <span className="border border-accent-green px-2 py-1 text-xs text-accent-green">USDC</span>
-            <span className="ml-2 text-text-muted">→ {agent.perCallHuman} → vault {agent.contracts.vault.slice(0, 10)}…</span>
-          </div>
-          {address && onBase ? (
-            <span className="text-xs text-text-muted">
-              your USDC: {usdcBalance !== undefined ? formatUsdc(usdcBalance, 2) : "—"}
-            </span>
-          ) : null}
-        </div>
-        {address && onBase && !hasFunds ? (
-          <div className="mt-3 text-xs text-text-muted">
-            need testnet USDC?{" "}
-            <a
-              href="https://faucet.circle.com/"
-              target="_blank"
-              rel="noreferrer"
-              className="text-accent-green hover:underline"
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-text-muted">pay with</span>
+          {(["USDC", "ETH"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setPayToken(t)}
+              className={`border px-3 py-1 text-xs ${
+                payToken === t
+                  ? "border-accent-green text-accent-green"
+                  : "border-border text-text-muted hover:text-text-primary"
+              }`}
             >
-              faucet.circle.com
-            </a>
-            {" "}— mint some to your address ({address.slice(0, 8)}…)
-          </div>
-        ) : null}
+              {t}
+            </button>
+          ))}
+          <span className="ml-2 text-text-muted">
+            → {agent.perCallHuman} USDC at vault {agent.contracts.vault.slice(0, 10)}…
+          </span>
+        </div>
+        <div className="text-xs text-text-muted">
+          {payToken === "USDC" ? (
+            <>
+              direct <code>USDC.transfer</code> to vault.{" "}
+              {address && onBase ? (
+                <>your USDC: {usdcBalance !== undefined ? formatUsdc(usdcBalance, 2) : "—"}</>
+              ) : null}
+            </>
+          ) : (
+            <>
+              ETH → swapped via{" "}
+              <a
+                href="https://docs.uniswap.org/contracts/v3/reference/deployments/base-deployments"
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent-green hover:underline"
+              >
+                Uniswap V3 SwapRouter02
+              </a>{" "}
+              against the WETH/USDC pool, output sent directly to vault. Up to 0.001 ETH spent;
+              dust refunded.{" "}
+              {address && onBase ? (
+                <>your ETH: {ethBalance ? Number(ethBalance.value) / 1e18 : "—"}</>
+              ) : null}
+            </>
+          )}
+        </div>
       </section>
 
       <section className="panel p-4">
@@ -268,6 +354,9 @@ export function SubscribeClient({ agent }: Props) {
           <code className="text-text-primary">
             {(stage as { hash?: Hex }).hash ?? "—"}
           </code>
+          {(stage as { payment?: PayToken }).payment === "ETH" ? (
+            <span className="ml-2 text-text-muted">— Uniswap V3 swap+settle</span>
+          ) : null}
           {stage.kind === "infer" ? <span className="ml-2">— operator validating + running inference…</span> : null}
         </div>
       ) : null}
