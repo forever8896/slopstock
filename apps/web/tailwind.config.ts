@@ -1,29 +1,19 @@
 import type { Config } from "tailwindcss";
 
-/**
- * Stratum theme. Bloomberg-terminal aesthetic — see docs/07-frontend.md §6.
- *
- *   bg.base      #0a0a0a   page
- *   bg.elev      #111111   cards, panels
- *   text.primary #e5e5e5   body
- *   text.muted   #737373   metadata, axis labels
- *   border       #262626   1px hairlines
- *   accent.green #10b981   verified, paid, received
- *   accent.red   #ef4444   failed, expired
- */
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        bg: { base: "#0a0a0a", elev: "#111111" },
-        text: { primary: "#e5e5e5", muted: "#737373" },
+        bg: { base: "#0a0a0a", elev: "#111111", deep: "#0d0d0d" },
+        text: { primary: "#e5e5e5", secondary: "#a3a3a3", muted: "#737373", muted2: "#525252" },
         border: "#262626",
-        accent: { green: "#10b981", red: "#ef4444" },
+        "border-2": "#1a1a1a",
+        accent: { green: "#10b981", "green-dim": "#0c5d44", red: "#ef4444", amber: "#f59e0b" },
       },
       fontFamily: {
-        // System mono stack — picks up JetBrains Mono / Fira Code / SF Mono if installed.
         mono: [
+          "var(--font-mono)",
           '"JetBrains Mono"',
           '"IBM Plex Mono"',
           '"Fira Code"',

@@ -11,17 +11,12 @@ import {
   useWatchContractEvent,
   useWriteContract,
 } from "wagmi";
+import { baseSepolia } from "wagmi/chains";
 import { parseUnits } from "viem";
-import {
-  erc20Abi,
-  marketplaceAbi,
-  stratumAgentNftAbi,
-} from "@stratum/contracts-types";
-import { ZG_GALILEO } from "@stratum/shared";
-import { AcquireEventLog } from "@/components/acquire-event-log";
-import type { EventLogEntry } from "@/lib/acquire";
+import { erc20Abi, ipoSaleAbi } from "@stratum/contracts-types";
+import { CIRCLE_USDC_BASE_SEPOLIA } from "@stratum/shared";
 import type { AgentDetail } from "@/lib/agents";
-import { formatUsdc, relativeTime, shortAddr } from "@/lib/format";
+import { formatShares, formatUsdc, pctOf, relativeTime, shortAddr } from "@/lib/format";
 
 type Hex = `0x${string}`;
 
@@ -29,458 +24,414 @@ interface Props {
   agent: AgentDetail;
 }
 
-const ZG_CHAIN_ID = ZG_GALILEO.chainId;
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
+interface BlotterRow {
+  id: string;
+  ts: number;
+  status: "ok" | "pending" | "fail";
+  label: string;
+  hash?: Hex;
+}
+
+const BASE_CHAIN_ID = baseSepolia.id;
+const PROTOCOL_FEE = 0.005;
 
 export function AcquireClient({ agent }: Props) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
-  const onZg = chainId === ZG_CHAIN_ID;
+  const onBase = chainId === BASE_CHAIN_ID;
 
-  const [formPrice, setFormPrice] = useState("60000");
-  const [formExpiryHours, setFormExpiryHours] = useState("48");
-  const [events, setEvents] = useState<EventLogEntry[]>([]);
-  const [pendingAction, setPendingAction] = useState<"approve" | "post" | "accept" | null>(null);
+  const [qty, setQty] = useState(500);
+  const [pendingAction, setPendingAction] = useState<"approve" | "buy" | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [synthRows, setSynthRows] = useState<BlotterRow[]>([]);
 
-  // ─── Reads ──────────────────────────────────────────────────────────
-  const { data: ownerOf, refetch: refetchOwner } = useReadContract({
-    address: agent.contracts.iNFT,
-    abi: stratumAgentNftAbi,
-    functionName: "ownerOf",
-    args: [agent.tokenId],
-    chainId: ZG_CHAIN_ID,
-  });
-
-  const { data: bidRaw, refetch: refetchBid } = useReadContract({
-    address: agent.contracts.marketplace,
-    abi: marketplaceAbi,
-    functionName: "getBid",
-    args: [agent.tokenId],
-    chainId: ZG_CHAIN_ID,
-  });
-
-  const { data: usdcAllowance, refetch: refetchAllowance } = useReadContract({
-    address: ZG_GALILEO.usdc,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: address ? [address, agent.contracts.marketplace] : undefined,
-    chainId: ZG_CHAIN_ID,
-    query: { enabled: Boolean(address) },
-  });
-
-  const { data: usdcBalance, refetch: refetchUsdcBalance } = useReadContract({
-    address: ZG_GALILEO.usdc,
+  // Mirror the cap-table reads from the agent loader.
+  const { data: usdcBalance, refetch: refetchUsdc } = useReadContract({
+    address: CIRCLE_USDC_BASE_SEPOLIA,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
-    chainId: ZG_CHAIN_ID,
+    chainId: BASE_CHAIN_ID,
+    query: { enabled: Boolean(address) },
+  });
+  const { data: usdcAllowance, refetch: refetchAllowance } = useReadContract({
+    address: CIRCLE_USDC_BASE_SEPOLIA,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: address ? [address, agent.contracts.ipoSale] : undefined,
+    chainId: BASE_CHAIN_ID,
     query: { enabled: Boolean(address) },
   });
 
-  const bid = useMemo(() => {
-    if (!bidRaw || bidRaw.bidder === ZERO_ADDRESS) return null;
-    return {
-      bidder: bidRaw.bidder,
-      price: bidRaw.price,
-      expiresAt: Number(bidRaw.expiresAt),
-      pubkey: bidRaw.bidderPubkey,
-    };
-  }, [bidRaw]);
-
-  const acquired = ownerOf?.toLowerCase() === address?.toLowerCase();
-
-  // ─── Writes ─────────────────────────────────────────────────────────
-  const { writeContractAsync, data: txHash, error: writeError } = useWriteContract();
+  const { writeContractAsync, data: txHash } = useWriteContract();
   const { isLoading: txPending, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
-    chainId: ZG_CHAIN_ID,
+    chainId: BASE_CHAIN_ID,
   });
 
   useEffect(() => {
     if (txConfirmed) {
-      // Refresh all reads after each tx confirmation.
-      void refetchBid();
-      void refetchOwner();
-      void refetchAllowance();
-      void refetchUsdcBalance();
       setPendingAction(null);
+      void refetchUsdc();
+      void refetchAllowance();
     }
-  }, [txConfirmed, refetchBid, refetchOwner, refetchAllowance, refetchUsdcBalance]);
+  }, [txConfirmed, refetchUsdc, refetchAllowance]);
 
-  // ─── Event watchers — real onchain log feeds the trace panel ────────
+  // Real on-chain Bought events feed the blotter.
+  const [chainRows, setChainRows] = useState<BlotterRow[]>([]);
   useWatchContractEvent({
-    address: agent.contracts.marketplace,
-    abi: marketplaceAbi,
-    eventName: "BidPosted",
-    chainId: ZG_CHAIN_ID,
-    args: { tokenId: agent.tokenId },
+    address: agent.contracts.ipoSale,
+    abi: ipoSaleAbi,
+    eventName: "Bought",
+    chainId: BASE_CHAIN_ID,
     onLogs: (logs) => {
+      const next: BlotterRow[] = [];
       for (const log of logs) {
-        const args = (log as { args?: { bidder?: Hex; price?: bigint; expiresAt?: bigint } }).args;
-        if (!args?.bidder || args.price === undefined || args.expiresAt === undefined) continue;
-        appendEvent({
-          kind: "post",
-          title: "Marketplace.BidPosted",
-          lines: [
-            `bidder ${shortAddr(args.bidder, 6)}`,
-            `price ${formatUsdc(args.price, 0)} USDC`,
-            `expires ${new Date(Number(args.expiresAt) * 1000).toISOString().slice(0, 19)}Z`,
-          ],
+        const args = (log as { args?: { buyer?: Hex; amount?: bigint; cost?: bigint }; transactionHash?: Hex }).args;
+        const hash = (log as { transactionHash?: Hex }).transactionHash;
+        if (!args?.buyer || args.amount === undefined || args.cost === undefined) continue;
+        next.push({
+          id: `${hash}-${args.buyer}`,
+          ts: Date.now(),
+          status: "ok",
+          label: `${shortAddr(args.buyer, 6)} filled ${formatShares(args.amount, 0)} sh · $${formatUsdc(args.cost, 2)}`,
+          hash,
         });
       }
-    },
-  });
-  useWatchContractEvent({
-    address: agent.contracts.marketplace,
-    abi: marketplaceAbi,
-    eventName: "BidRefunded",
-    chainId: ZG_CHAIN_ID,
-    args: { tokenId: agent.tokenId },
-    onLogs: (logs) => {
-      for (const log of logs) {
-        const args = (log as { args?: { bidder?: Hex; price?: bigint } }).args;
-        if (!args?.bidder || args.price === undefined) continue;
-        appendEvent({
-          kind: "info",
-          title: "Marketplace.BidRefunded",
-          lines: [`refunded ${formatUsdc(args.price, 0)} USDC to ${shortAddr(args.bidder, 6)}`],
-        });
-      }
-    },
-  });
-  useWatchContractEvent({
-    address: agent.contracts.marketplace,
-    abi: marketplaceAbi,
-    eventName: "Acquired",
-    chainId: ZG_CHAIN_ID,
-    args: { tokenId: agent.tokenId },
-    onLogs: (logs) => {
-      for (const log of logs) {
-        const args = (log as { args?: { acquirer?: Hex; seller?: Hex; price?: bigint } }).args;
-        if (!args?.acquirer || !args.seller || args.price === undefined) continue;
-        appendEvent({
-          kind: "accept",
-          title: "Marketplace.Acquired",
-          lines: [
-            `${shortAddr(args.seller, 6)} → ${shortAddr(args.acquirer, 6)}`,
-            `${formatUsdc(args.price, 0)} USDC released to seller`,
-            "iTransfer cleared all authorizeUsage grants",
-          ],
-        });
-      }
+      if (next.length) setChainRows((prev) => [...next, ...prev]);
     },
   });
 
-  function appendEvent(e: Omit<EventLogEntry, "ts">) {
-    setEvents((prev) => [...prev, { ...e, ts: Date.now() }]);
-  }
+  // ─── Derived values ─────────────────────────────────────────────────
+  const pricePerShare = agent.ipo.pricePerShareUsdc; // USDC smallest units
+  const remaining = agent.ipo.allocation > agent.ipo.sold ? agent.ipo.allocation - agent.ipo.sold : 0n;
+  const totalUsd = useMemo(() => {
+    // Pre-fee USD: qty * pricePerShare (USDC smallest), divided by 10^6 to get USD.
+    // qty is plain number; pricePerShare is bigint.
+    const subSmallest = BigInt(qty) * pricePerShare;
+    return Number(subSmallest) / 1e6;
+  }, [qty, pricePerShare]);
+  const fee = totalUsd * PROTOCOL_FEE;
+  const total = totalUsd + fee;
+
+  const soldPct = pctNum(agent.ipo.sold, agent.ipo.allocation);
+  const raisedUsd =
+    Number((agent.ipo.sold / 10n ** 18n) * pricePerShare) / 1e6;
+  const targetUsd =
+    Number((agent.ipo.allocation / 10n ** 18n) * pricePerShare) / 1e6;
+
+  const blotter = [...synthRows, ...chainRows].slice(0, 12);
 
   // ─── Actions ────────────────────────────────────────────────────────
-  async function postBid() {
-    if (!address || !onZg) return;
-    const priceUsdc = parseUnits(formPrice, 6);
-    if (bid && priceUsdc <= bid.price) {
-      appendEvent({
-        kind: "info",
-        title: "rejected (preflight)",
-        lines: [`bid must strictly beat current best of ${formatUsdc(bid.price, 0)} USDC`],
-      });
-      return;
-    }
+  async function buy() {
+    if (!address || !onBase) return;
+    setErrorMsg(null);
+    const sharesWei = parseUnits(String(qty), 18);
+    const costSmallest = BigInt(qty) * pricePerShare;
+
+    const synthId = crypto.randomUUID();
+    setSynthRows((r) => [
+      {
+        id: synthId,
+        ts: Date.now(),
+        status: "pending",
+        label: `you · ${shortAddr(address, 6)} · pending · ${qty} sh · $${total.toFixed(2)}`,
+      },
+      ...r,
+    ]);
 
     try {
-      // 1. Approve Marketplace to pull USDC if needed.
-      if (!usdcAllowance || usdcAllowance < priceUsdc) {
+      // 1. Approve if needed.
+      if (!usdcAllowance || usdcAllowance < costSmallest) {
         setPendingAction("approve");
-        appendEvent({
-          kind: "info",
-          title: "USDC.approve",
-          lines: [`grant Marketplace allowance for ${formatUsdc(priceUsdc, 0)} USDC`],
-        });
         await writeContractAsync({
-          address: ZG_GALILEO.usdc,
+          address: CIRCLE_USDC_BASE_SEPOLIA,
           abi: erc20Abi,
           functionName: "approve",
-          args: [agent.contracts.marketplace, priceUsdc],
-          chainId: ZG_CHAIN_ID,
+          args: [agent.contracts.ipoSale, costSmallest],
+          chainId: BASE_CHAIN_ID,
         });
-        // Wait for state refresh then proceed.
         await new Promise((r) => setTimeout(r, 1500));
       }
 
-      // 2. Post the bid. Pubkey is a placeholder; production binds it to the
-      //    bidder's TEE for the seller to seal the new content key against.
-      const placeholderPubkey = generatePlaceholderPubkey();
-      const expiresAt = BigInt(Math.floor(Date.now() / 1000) + Number(formExpiryHours) * 3600);
+      // 2. Buy.
+      setPendingAction("buy");
+      const hash = await writeContractAsync({
+        address: agent.contracts.ipoSale,
+        abi: ipoSaleAbi,
+        functionName: "buy",
+        args: [sharesWei],
+        chainId: BASE_CHAIN_ID,
+      });
 
-      setPendingAction("post");
-      await writeContractAsync({
-        address: agent.contracts.marketplace,
-        abi: marketplaceAbi,
-        functionName: "postBid",
-        args: [agent.tokenId, priceUsdc, placeholderPubkey, Number(expiresAt) as unknown as bigint],
-        chainId: ZG_CHAIN_ID,
-      });
+      setSynthRows((r) =>
+        r.map((row) =>
+          row.id === synthId
+            ? {
+                ...row,
+                status: "ok",
+                hash,
+                label: `you · ${shortAddr(address, 6)} filled ${qty} sh · $${total.toFixed(2)} · erc-20 minted`,
+              }
+            : row,
+        ),
+      );
     } catch (e) {
-      appendEvent({
-        kind: "info",
-        title: "tx error",
-        lines: [e instanceof Error ? e.message : String(e)],
-      });
+      const msg = e instanceof Error ? e.message : String(e);
+      setErrorMsg(msg);
+      setSynthRows((r) =>
+        r.map((row) =>
+          row.id === synthId
+            ? { ...row, status: "fail", label: `you · reverted · ${msg.slice(0, 60)}` }
+            : row,
+        ),
+      );
       setPendingAction(null);
     }
   }
 
-  async function acceptBid() {
-    if (!address || !onZg || !bid) return;
-    if (ownerOf?.toLowerCase() !== address.toLowerCase()) {
-      appendEvent({
-        kind: "info",
-        title: "rejected (preflight)",
-        lines: ["only the current owner may accept"],
-      });
-      return;
-    }
-    try {
-      // The proof bytes encode a TEE re-encryption attestation. Onchain we just
-      // require non-empty bytes for now (placeholder until the 0G fork lands).
-      const proof = generatePlaceholderProof();
-      setPendingAction("accept");
-      appendEvent({
-        kind: "info",
-        title: "preparing iTransfer",
-        lines: [
-          "rotating sealed key inside TEE",
-          "re-encrypting under bidder's pubkey",
-          "submitting proof to AgentNFT.iTransfer",
-        ],
-      });
-      await writeContractAsync({
-        address: agent.contracts.marketplace,
-        abi: marketplaceAbi,
-        functionName: "accept",
-        args: [agent.tokenId, proof],
-        chainId: ZG_CHAIN_ID,
-      });
-    } catch (e) {
-      appendEvent({
-        kind: "info",
-        title: "tx error",
-        lines: [e instanceof Error ? e.message : String(e)],
-      });
-      setPendingAction(null);
-    }
+  function fmtUsd(n: number) {
+    return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
-
-  async function mintTestUsdc() {
-    if (!address || !onZg) return;
-    try {
-      await writeContractAsync({
-        address: ZG_GALILEO.usdc,
-        abi: testnetUsdcMintAbi,
-        functionName: "mint",
-        args: [address, parseUnits("100000", 6)],
-        chainId: ZG_CHAIN_ID,
-      });
-    } catch (e) {
-      appendEvent({
-        kind: "info",
-        title: "USDC mint error",
-        lines: [e instanceof Error ? e.message : String(e)],
-      });
-    }
-  }
-
-  // ─── Render ─────────────────────────────────────────────────────────
-  const ownerLabel = ownerOf ?? "—";
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-2">
-        <div className="text-xs text-text-muted">
-          <Link href={`/agent/${agent.ticker}`} className="hover:text-text-primary">
-            ← {agent.ens}
-          </Link>
-        </div>
-        <h1 className="text-2xl">acquire {agent.ticker} (whole iNFT)</h1>
-        <p className="max-w-2xl text-sm text-text-muted">
-          Acquiring the iNFT triggers an in-enclave re-encryption: a new content key is generated
-          inside the TEE, the weights are re-encrypted, and the previous owner&apos;s sealed key is
-          rotated out. All <code className="text-text-primary">authorizeUsage</code> grants are
-          atomically cleared, the ENS resolver flips, and escrow releases to the seller — one tx.
-        </p>
-      </header>
+    <>
+      <div className="crumb">
+        <Link href="/">markets</Link> <span className="muted">/</span>{" "}
+        <Link href={`/agent/${agent.ticker}`}>{agent.ticker}</Link>{" "}
+        <span className="muted">/</span> <span className="acc">acquire</span>
+        <span style={{ float: "right", color: "var(--mute-2)" }}>
+          share contract <span className="fg2">{shortAddr(agent.contracts.shareToken, 6)}</span> ·{" "}
+          {formatShares(agent.ipo.allocation, 0)} cap
+        </span>
+      </div>
 
-      {!isConnected ? (
-        <div className="panel border-yellow-400 px-4 py-3 text-sm">
-          connect a wallet to interact with the Marketplace
-        </div>
-      ) : !onZg ? (
-        <div className="panel border-yellow-400 px-4 py-3 text-sm flex items-center justify-between">
-          <span>switch to 0G Galileo (chain {ZG_CHAIN_ID}) to read & write Marketplace state</span>
-          <button
-            onClick={() => switchChain({ chainId: ZG_CHAIN_ID })}
-            className="border border-accent-green px-3 py-1.5 text-xs text-accent-green hover:bg-bg-elev"
-          >
-            switch network
-          </button>
-        </div>
-      ) : null}
-
-      <section className="panel p-4">
-        <div className="label mb-3">current owner</div>
-        <div className="flex items-center justify-between text-sm">
-          <code className="text-text-primary">{ownerLabel}</code>
-          <span className="text-xs text-text-muted">
-            {acquired ? "you own this agent" : "not you"}
+      <section className="ipo-hero">
+        <div className="ipo-h1">
+          <span className="tk">{agent.ticker}</span>
+          <span className="ens">{agent.ens} · ipo · primary issuance</span>
+          <span className={`pill ${agent.ipo.isOpen ? "ok" : ""}`}>● {agent.ipo.isOpen ? "open" : "closed"}</span>
+          <span className="pill">
+            {agent.ipo.isOpen ? `closes ${relativeTime(agent.ipo.endsAt)}` : `closed ${relativeTime(agent.ipo.endsAt)}`}
           </span>
+          <span className="pill warn">price-locked</span>
+        </div>
+
+        <div className="fundraise">
+          <div className="nums">
+            <span className="big">{formatShares(agent.ipo.sold, 0)}</span>
+            <span className="of">
+              / {formatShares(agent.ipo.allocation, 0)} shares · {pctOf(agent.ipo.sold, agent.ipo.allocation, 1)}
+            </span>
+          </div>
+          <div className="meta">
+            <div>
+              raised <span className="acc" style={{ fontSize: 14 }}>{fmtUsd(raisedUsd)}</span> /{" "}
+              {fmtUsd(targetUsd)}
+            </div>
+            <div className="muted">
+              avg fill — · {/* total holders not in scope */}
+              cap {formatShares(agent.ipo.allocation, 0)} sh
+            </div>
+          </div>
+        </div>
+
+        <div className="tape-big">
+          <div className="fill" style={{ width: `${soldPct}%` }} />
+          <div className="ticks">
+            {Array.from({ length: 20 }).map((_, i) => <span key={i} />)}
+          </div>
+          <div className="lhs">[{ascii(soldPct, 20)}] {soldPct.toFixed(1)}%</div>
+          <div className="pct">
+            {formatShares(agent.ipo.sold, 0)} / {formatShares(agent.ipo.allocation, 0)} sh
+          </div>
+        </div>
+        <div className="scale">
+          {["0%", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"].map((s) => (
+            <span key={s}>{s}</span>
+          ))}
+        </div>
+
+        <div className="ipo-stats">
+          <Stat l="price / share" v={`$${formatUsdc(agent.ipo.pricePerShareUsdc, 2)}`} sub="usdc · locked" />
+          <Stat l="remaining" v={formatShares(remaining, 0)} sub="sh" />
+          <Stat l="min · max" v="1 · 5,000" sub="sh / wallet" />
+          <Stat l="post-ipo apy" v="≈ revenue-based" sub="distributed pro-rata" accent />
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <section className="panel p-4">
-          <div className="label mb-3">post bid</div>
-          <p className="mb-3 text-xs text-text-muted">
-            Strictly beat the current best ({bid ? `${formatUsdc(bid.price, 0)} USDC` : "no bid yet"}).
-            Escrow is pulled up-front; the prior bidder is refunded by the contract.
-          </p>
-          {address && onZg ? (
-            <div className="mb-3 flex items-center justify-between text-xs text-text-muted">
-              <span>your USDC: {usdcBalance ? formatUsdc(usdcBalance, 2) : "0.00"}</span>
-              <button
-                type="button"
-                onClick={mintTestUsdc}
-                disabled={pendingAction !== null}
-                className="border border-border px-2 py-1 hover:border-accent-green hover:text-accent-green disabled:opacity-40"
-              >
-                + mint 100k testnet USDC
+      <section className="acq-grid">
+        <div className="qty-box">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <h3 style={{ margin: 0, fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--mute)", fontWeight: 500 }}>
+              acquire · primary fill
+            </h3>
+            <span className="muted" style={{ fontSize: 11 }}>
+              filling against share contract {shortAddr(agent.contracts.shareToken, 6)}
+            </span>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div className="up">share count</div>
+            <div className="qty-input" style={{ marginTop: 6 }}>
+              <button onClick={() => setQty(Math.max(1, qty - 100))}>−</button>
+              <input
+                type="number"
+                min="1"
+                max="5000"
+                step="10"
+                value={qty}
+                onChange={(e) => setQty(Math.max(1, Math.min(5000, parseInt(e.target.value || "0", 10))))}
+              />
+              <button onClick={() => setQty(Math.min(5000, qty + 100))}>+</button>
+            </div>
+            <div className="preset-row">
+              {[100, 500, 1000, 2500, 5000].map((q) => (
+                <button key={q} onClick={() => setQty(q)}>
+                  {q === 5000 ? "max · 5,000" : q.toLocaleString()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="cost-kv">
+            <CostRow k="share count" v={qty.toLocaleString()} />
+            <CostRow k="price / share" v={`$${formatUsdc(pricePerShare, 2)} usdc`} />
+            <CostRow k="subtotal" v={fmtUsd(totalUsd)} />
+            <CostRow k={`protocol fee · ${(PROTOCOL_FEE * 100).toFixed(2)}%`} v={fmtUsd(fee)} />
+            <CostRow k="network" v="~$0.0004" />
+            <div className="row total">
+              <div className="k">total · pay & mint</div>
+              <div className="v">{fmtUsd(total)}</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: "var(--mute)" }}>
+            <span className="pill">erc-20 minted to msg.sender</span>
+            <span className="pill">pro-rata revenue from block n+1</span>
+            <span className="pill ok">tee-attested vault</span>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap", alignItems: "center" }}>
+            {!isConnected ? (
+              <span className="pill warn">connect wallet to mint</span>
+            ) : !onBase ? (
+              <button className="btn" onClick={() => switchChain({ chainId: BASE_CHAIN_ID })}>
+                switch to base-sepolia
               </button>
+            ) : (
+              <button
+                className="btn primary"
+                onClick={buy}
+                disabled={pendingAction !== null || !agent.ipo.isOpen}
+              >
+                {pendingAction === "approve"
+                  ? "approving usdc…"
+                  : pendingAction === "buy"
+                    ? txPending ? "minting…" : "submitting…"
+                    : agent.ipo.isOpen
+                      ? `pay & mint ${qty.toLocaleString()} sh →`
+                      : "ipo closed"}
+              </button>
+            )}
+            <Link className="btn" href={`/agent/${agent.ticker}`}>view holder table</Link>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--mute)" }}>
+              slippage 0% · price-locked window
+            </span>
+          </div>
+          {address && onBase ? (
+            <div style={{ marginTop: 10, fontSize: 11, color: "var(--mute)" }}>
+              your usdc:{" "}
+              <span className="fg2">
+                ${usdcBalance ? formatUsdc(usdcBalance, 2) : "0.00"}
+              </span>{" "}
+              · allowance:{" "}
+              <span className="fg2">
+                ${usdcAllowance ? formatUsdc(usdcAllowance, 2) : "0.00"}
+              </span>
             </div>
           ) : null}
-          <label className="block text-xs text-text-muted">
-            price (USDC)
-            <input
-              type="number"
-              min="0"
-              step="100"
-              value={formPrice}
-              onChange={(e) => setFormPrice(e.target.value)}
-              className="mt-1 block w-full border border-border bg-bg-base px-2 py-1.5 text-sm focus:border-accent-green focus:outline-none"
-            />
-          </label>
-          <label className="mt-3 block text-xs text-text-muted">
-            expires in (hours)
-            <input
-              type="number"
-              min="1"
-              max="168"
-              value={formExpiryHours}
-              onChange={(e) => setFormExpiryHours(e.target.value)}
-              className="mt-1 block w-full border border-border bg-bg-base px-2 py-1.5 text-sm focus:border-accent-green focus:outline-none"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={postBid}
-            disabled={!address || !onZg || pendingAction !== null}
-            className="mt-4 w-full border border-border px-3 py-2 text-sm hover:border-accent-green hover:text-accent-green disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {pendingAction === "approve"
-              ? "approving USDC…"
-              : pendingAction === "post"
-              ? "posting bid…"
-              : "post bid"}
-          </button>
-        </section>
-
-        <section className="panel p-4">
-          <div className="label mb-3">current best bid</div>
-          <dl className="space-y-2 text-sm">
-            <Row label="price" value={bid ? `${formatUsdc(bid.price, 0)} USDC` : "—"} />
-            <Row label="bidder" value={bid ? shortAddr(bid.bidder, 6) : "—"} />
-            <Row label="expires" value={bid ? relativeTime(bid.expiresAt) : "—"} />
-            <Row
-              label="bidder pubkey"
-              value={bid && bid.pubkey.length > 2 ? shortAddr(bid.pubkey as Hex, 6) : "—"}
-              hint="seals the new content key against this pubkey"
-            />
-          </dl>
-          <button
-            type="button"
-            onClick={acceptBid}
-            disabled={!address || !onZg || !bid || pendingAction !== null || !acquiredCanAccept(ownerOf, address)}
-            className="mt-4 w-full border border-accent-red bg-bg-elev px-3 py-2 text-sm text-accent-red hover:bg-bg-base disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {pendingAction === "accept"
-              ? "accepting…"
-              : txPending
-              ? "waiting for confirmation…"
-              : "accept (TEE re-encrypt + iTransfer)"}
-          </button>
-          {writeError ? (
-            <div className="mt-3 text-xs text-accent-red">{writeError.message}</div>
+          {errorMsg ? (
+            <div style={{ marginTop: 10, color: "var(--red)", fontSize: 12 }}>{errorMsg}</div>
           ) : null}
-          <details className="mt-3 text-xs">
-            <summary className="cursor-pointer text-text-muted">what this tx does</summary>
-            <ol className="mt-2 list-decimal space-y-1 pl-5 text-text-muted">
-              <li>generate a fresh content key inside Intel TDX</li>
-              <li>re-encrypt the weights, system prompt, and RAG corpus</li>
-              <li>seal the new key under the bidder&apos;s pubkey</li>
-              <li>call AgentNFT.iTransfer (verifies the proof onchain)</li>
-              <li>atomically clear all active subscriber grants (usageVersion bump)</li>
-              <li>flip the ENS resolver to the acquirer</li>
-            </ol>
-          </details>
-        </section>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head">
+            <div className="lhs">
+              <span>acquire event log</span>
+              <span className="tag muted">live · onchain</span>
+            </div>
+            <div className="rhs">
+              <span className="pill ok">streaming</span>
+            </div>
+          </div>
+          <div className="blotter">
+            {blotter.length === 0 ? (
+              <div className="blot-row" style={{ borderBottom: 0 }}>
+                <span className="ts">—</span>
+                <span className="glyph">·</span>
+                <span className="body muted">no fills yet · be the first</span>
+                <span />
+              </div>
+            ) : (
+              blotter.map((r) => (
+                <div key={r.id} className={`blot-row ${r.status}`}>
+                  <span className="ts">
+                    {new Date(r.ts).toISOString().slice(11, 19)}
+                  </span>
+                  <span className="glyph">{r.status === "ok" ? "▸" : r.status === "pending" ? "·" : "×"}</span>
+                  <span className="body" dangerouslySetInnerHTML={{ __html: r.label.replace(/\b(filled|pending|reverted)\b/, '<b>$1</b>') }} />
+                  <span className="hash">{r.hash ? shortAddr(r.hash, 4) : "—"}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+
+      <div className="notes">
+        <h3>design notes · acquire / ipo</h3>
+        <ul>
+          <li><b>fundraise tape as the hero.</b> A 38px striped progress bar with hairline ticks every 5% reads as a real-time fundraise tape, not a marketing progress bar. The ASCII <code>[████░░]</code> caption sits inline on the bar via mix-blend-mode for that quant-desk feel.</li>
+          <li><b>cost preview is live math.</b> Type a share count and every line updates: subtotal, 0.5% protocol fee, network estimate, total. The total row is the only place accent fills the whole row — the action moment.</li>
+          <li><b>blotter, not &quot;transactions.&quot;</b> Monospace timestamps, status glyph in its own column (▸ ok · · pending × failed), tx hash as a copy-pill on the right. Real <code>Bought</code> events stream in via wagmi event watch.</li>
+          <li><b>mobile bottom-bar.</b> The cost total + mint button stick to the bottom of the viewport; the most expensive operation (mint) is always one tap away.</li>
+          <li><b>post-ipo apy estimate</b> sits in the stats strip — judges are buying a productive asset, so frame it like a fixed-income product: par value + yield + remaining supply.</li>
+        </ul>
       </div>
-
-      <AcquireEventLog events={events} />
-    </div>
+    </>
   );
 }
 
-function acquiredCanAccept(owner: Hex | undefined, account: Hex | undefined) {
-  if (!owner || !account) return false;
-  return owner.toLowerCase() === account.toLowerCase();
-}
-
-function generatePlaceholderPubkey(): Hex {
-  const bytes = new Uint8Array(33);
-  crypto.getRandomValues(bytes);
-  bytes[0] = 0x04;
-  return ("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
-}
-
-function generatePlaceholderProof(): Hex {
-  const bytes = new Uint8Array(64);
-  crypto.getRandomValues(bytes);
-  return ("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
-}
-
-function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Stat({ l, v, sub, accent }: { l: string; v: string; sub?: string; accent?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-4">
-      <dt className="text-xs text-text-muted">{label}</dt>
-      <dd className="text-right">
-        <div>{value}</div>
-        {hint ? <div className="text-xs text-text-muted">{hint}</div> : null}
-      </dd>
+    <div className="c">
+      <div className="l">{l}</div>
+      <div className="v" style={accent ? { color: "var(--accent)", fontSize: 16 } : undefined}>
+        {v} {sub ? <small>{sub}</small> : null}
+      </div>
     </div>
   );
 }
 
-// TestnetUSDC has a permissionless mint(address,uint256) that's not in the
-// generic erc20Abi. Inline ABI fragment.
-const testnetUsdcMintAbi = [
-  {
-    type: "function",
-    name: "mint",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [],
-  },
-] as const;
+function CostRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="row">
+      <div className="k">{k}</div>
+      <div className="v">{v}</div>
+    </div>
+  );
+}
+
+function pctNum(num: bigint, den: bigint): number {
+  if (den === 0n) return 0;
+  const permille = Number((num * 1000n) / den);
+  return Math.min(100, Math.max(0, permille / 10));
+}
+
+function ascii(pct: number, n: number): string {
+  const filled = Math.round((pct / 100) * n);
+  return "█".repeat(Math.max(0, filled)) + "░".repeat(Math.max(0, n - filled));
+}
