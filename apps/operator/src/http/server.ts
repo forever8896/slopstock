@@ -25,10 +25,13 @@ import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
 import { handleProfile } from "../mcp/tools.ts";
 import {
+  attachFinance,
+  getDynamicAgent,
   listDynamicAgents,
   registerDynamicAgent,
   type DynamicAgent,
 } from "../store/dynamic-registry.ts";
+import { deployFinanceStack } from "../store/finance-deploy.ts";
 import type { RuntimeRouter } from "../runtime/index.ts";
 import { RuntimeError } from "../runtime/index.ts";
 import { listReceipts, recordReceipt } from "../store/receipts.ts";
@@ -108,6 +111,11 @@ export function startHttpServer(deps: HttpDeps) {
         return withCors(await handleTestAgent(req, deps));
       }
 
+      const financeMatch = url.pathname.match(/^\/agents\/(\d+)\/deploy-finance$/);
+      if (financeMatch && req.method === "POST") {
+        return withCors(await handleDeployFinance(financeMatch[1]!, deps));
+      }
+
       return withCors(new Response("not found", { status: 404 }));
     },
   });
@@ -162,6 +170,44 @@ async function handleRegisterAgent(req: Request): Promise<Response> {
 async function handleListAgents(): Promise<Response> {
   const agents = await listDynamicAgents();
   return json({ agents });
+}
+
+async function handleDeployFinance(tokenIdStr: string, deps: HttpDeps): Promise<Response> {
+  const agent = await getDynamicAgent(tokenIdStr);
+  if (!agent) return json({ error: `tokenId ${tokenIdStr} not in dynamic registry — call /agents/register first` }, { status: 404 });
+  if (agent.finance) return json({ ok: true, agent, alreadyDeployed: true });
+  if (!deps.config.DEPLOYER_PRIVATE_KEY) {
+    return json({ error: "operator missing DEPLOYER_PRIVATE_KEY env" }, { status: 503 });
+  }
+
+  try {
+    const pricePerShareUsd = ((Number(agent.perCallSmallest) / 1e6) * 10).toFixed(2);
+    const result = await deployFinanceStack({
+      tokenId: agent.tokenId,
+      ticker: agent.ticker,
+      pricePerShareUsd,
+      maxShares: "100000",
+      creator: agent.creator as `0x${string}`,
+      deployerKey: deps.config.DEPLOYER_PRIVATE_KEY as `0x${string}`,
+      rpcUrl: deps.config.BASE_RPC_URL,
+    });
+    const finance = {
+      shareToken: result.shareToken,
+      revenueVault: result.revenueVault,
+      ipoSale: result.ipoSale,
+      pricePerShareUsd,
+      maxShares: "100000",
+      deployedAt: Math.floor(Date.now() / 1000),
+    };
+    const updated = await attachFinance(agent.tokenId, finance);
+    return json({ ok: true, agent: updated, txHashes: result.txHashes });
+  } catch (err) {
+    console.error("[finance-deploy] failed:", err);
+    return json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
+  }
 }
 
 /**

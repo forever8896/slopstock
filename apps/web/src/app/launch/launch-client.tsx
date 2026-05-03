@@ -108,6 +108,14 @@ export function LaunchClient() {
   const [testInput, setTestInput] = useState("Bonjour, comment ça va aujourd'hui ?");
   const [testRunning, setTestRunning] = useState(false);
   const [testOutput, setTestOutput] = useState<string | null>(null);
+  const [financeDeploying, setFinanceDeploying] = useState(false);
+  const [financeError, setFinanceError] = useState<string | null>(null);
+  const [finance, setFinance] = useState<{
+    shareToken: string;
+    revenueVault: string;
+    ipoSale: string;
+    txHashes: { shareToken: string; revenueVault: string; ipoSale: string };
+  } | null>(null);
 
   const { writeContractAsync, data: txHash } = useWriteContract();
   const {
@@ -214,6 +222,36 @@ export function LaunchClient() {
       });
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function deployFinance() {
+    if (!mintedTokenId || !registered) return;
+    setFinanceDeploying(true);
+    setFinanceError(null);
+    try {
+      const res = await fetch(`${OPERATOR_URL}/agents/${mintedTokenId}/deploy-finance`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      });
+      const txt = await res.text();
+      if (!res.ok) throw new Error(`operator ${res.status}: ${txt.slice(0, 400)}`);
+      const body = JSON.parse(txt) as {
+        agent?: { finance?: { shareToken: string; revenueVault: string; ipoSale: string } };
+        txHashes?: { shareToken: string; revenueVault: string; ipoSale: string };
+      };
+      const f = body.agent?.finance;
+      if (!f) throw new Error("operator returned no finance addresses");
+      setFinance({
+        shareToken: f.shareToken,
+        revenueVault: f.revenueVault,
+        ipoSale: f.ipoSale,
+        txHashes: body.txHashes ?? { shareToken: "", revenueVault: "", ipoSale: "" },
+      });
+    } catch (e) {
+      setFinanceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFinanceDeploying(false);
     }
   }
 
@@ -503,6 +541,49 @@ export function LaunchClient() {
                     {testOutput}
                   </pre>
                 ) : null}
+              </div>
+
+              {/* Finance deploy — operator deploys ShareToken + Vault + IPO on Base */}
+              <div className="out" style={{ marginTop: 14 }}>
+                <h4>fractional shares · deploy on base sepolia</h4>
+                {finance ? (
+                  <div className="kv" style={{ marginTop: 6 }}>
+                    <div className="k">share token</div>
+                    <div className="v acc">
+                      <a href={`https://sepolia.basescan.org/address/${finance.shareToken}`} target="_blank" rel="noreferrer">
+                        {shortish(finance.shareToken)} ↗
+                      </a>
+                    </div>
+                    <div className="k">revenue vault</div>
+                    <div className="v acc">
+                      <a href={`https://sepolia.basescan.org/address/${finance.revenueVault}`} target="_blank" rel="noreferrer">
+                        {shortish(finance.revenueVault)} ↗
+                      </a>
+                    </div>
+                    <div className="k">ipo sale</div>
+                    <div className="v acc">
+                      <a href={`https://sepolia.basescan.org/address/${finance.ipoSale}`} target="_blank" rel="noreferrer">
+                        {shortish(finance.ipoSale)} ↗
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, color: "var(--fg-2)", marginBottom: 8 }}>
+                      one click → operator deploys ShareToken (1M supply to you), RevenueVault, and IPOSale on Base Sepolia. After this your agent has a live cap table + primary issuance.
+                    </div>
+                    <button
+                      className="btn primary"
+                      onClick={deployFinance}
+                      disabled={financeDeploying}
+                    >
+                      {financeDeploying ? "deploying 3 contracts on base…" : "deploy fractional shares →"}
+                    </button>
+                    {financeError ? (
+                      <div style={{ marginTop: 8, color: "var(--red)", fontSize: 12 }}>{financeError}</div>
+                    ) : null}
+                  </>
+                )}
               </div>
             </div>
           ) : null}

@@ -88,6 +88,14 @@ const envSchema = z.object({
     .string()
     .regex(/^0x[a-fA-F0-9]{64}$/),
 
+  // Deployer key — used by the permissionless launch flow to deploy
+  // ShareToken/RevenueVault/IPOSale on Base Sepolia for newly-minted
+  // agents. Optional: if absent, /agents/:tokenId/deploy-finance returns 503.
+  DEPLOYER_PRIVATE_KEY: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{64}$/)
+    .optional(),
+
   // Stratum on-chain singletons (0G Galileo). Required so the operator can
   // resolve agent profiles, the per-agent vault address, and the iNFT
   // measurement.

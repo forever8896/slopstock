@@ -25,6 +25,15 @@ export interface DynamicAgent {
   creator: string;
   txHash: string;
   createdAt: number;
+  /** Populated by the finance-deploy step (POST /agents/:tokenId/deploy-finance). */
+  finance?: {
+    shareToken: string;
+    revenueVault: string;
+    ipoSale: string;
+    pricePerShareUsd: string;
+    maxShares: string;
+    deployedAt: number;
+  };
 }
 
 import { setDynamicSnapshot } from "../runtime/dynamic-cache.ts";
@@ -71,9 +80,10 @@ export function initRegistry(dataDir: string): void {
   configurePath(dataDir);
 }
 
-export async function getDynamicAgent(tokenId: bigint): Promise<DynamicAgent | null> {
+export async function getDynamicAgent(tokenIdOrString: bigint | string): Promise<DynamicAgent | null> {
   await ensureLoaded();
-  return cache.get(tokenId.toString()) ?? null;
+  const key = typeof tokenIdOrString === "string" ? tokenIdOrString : tokenIdOrString.toString();
+  return cache.get(key) ?? null;
 }
 
 export async function listDynamicAgents(): Promise<DynamicAgent[]> {
@@ -87,4 +97,21 @@ export async function registerDynamicAgent(input: DynamicAgent): Promise<void> {
   setDynamicSnapshot(new Map(cache));
   await flush();
   console.log(`[dynamic-registry] registered tokenId=${input.tokenId} ticker=${input.ticker} model=${input.model}`);
+}
+
+export async function attachFinance(
+  tokenId: string,
+  finance: NonNullable<DynamicAgent["finance"]>,
+): Promise<DynamicAgent | null> {
+  await ensureLoaded();
+  const existing = cache.get(tokenId);
+  if (!existing) return null;
+  const updated: DynamicAgent = { ...existing, finance };
+  cache.set(tokenId, updated);
+  setDynamicSnapshot(new Map(cache));
+  await flush();
+  console.log(
+    `[dynamic-registry] tokenId=${tokenId} finance: share=${finance.shareToken} vault=${finance.revenueVault} ipo=${finance.ipoSale}`,
+  );
+  return updated;
 }
