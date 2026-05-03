@@ -37,8 +37,8 @@ export default async function Home() {
 
           <div className="hero-cta">
             <Link className="btn primary" href="/agent/AUDIT">browse agents →</Link>
-            <Link className="btn" href="/agent/AUDIT/subscribe">submit inference</Link>
-            <Link className="btn ghost" href="/agent/AUDIT/acquire">acquire shares</Link>
+            <Link className="btn" href="/launch">launch your own</Link>
+            <Link className="btn ghost" href="/agent/AUDIT/subscribe">submit inference</Link>
           </div>
 
           <div className="agent-event">

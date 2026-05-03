@@ -75,8 +75,11 @@ const envSchema = z.object({
   // Min confirmations on Base Sepolia before a payment receipt is accepted.
   X402_MIN_CONFIRMATIONS: z.coerce.number().int().nonnegative().default(0),
 
-  // Local ports
-  HTTP_PORT: z.coerce.number().int().default(8402),
+  // Local ports. Railway/Render/Fly inject $PORT — fall back to that if
+  // HTTP_PORT isn't explicitly set, otherwise default to 8402 for local dev.
+  HTTP_PORT: z.coerce.number().int().default(
+    process.env["PORT"] ? Number(process.env["PORT"]) : 8402,
+  ),
   MCP_PORT: z.coerce.number().int().default(9050),
   AXL_BRIDGE_URL: z.string().url().default("http://127.0.0.1:9001"),
 

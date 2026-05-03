@@ -60,19 +60,19 @@
     padding: 10px 18px;
   }
   .brand {
-    display: flex; align-items: baseline; gap: 10px;
+    display: flex; align-items: center; gap: 10px;
     font-weight: 700;
     letter-spacing: 0.02em;
   }
   .brand .mark {
     display: inline-flex;
-    flex-direction: column;
-    line-height: 0.55;
-    font-size: 16px;
-    letter-spacing: -0.05em;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
     color: var(--accent);
-    transform: translateY(2px);
   }
+  .brand .mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .brand .mark span { display: block; }
   .brand .word { font-size: 14px; }
   .brand .proto { font-size: 10px; color: var(--mute); letter-spacing: 0.18em; text-transform: uppercase; }
@@ -359,21 +359,8 @@
   }
   .foot .seal { display: flex; gap: 10px; align-items: center; }
   .foot .seal .dot { width: 6px; height: 6px; background: var(--accent); display: inline-block; }
-
-  /* DESIGN NOTES (judge-defense) */
-  .notes {
-    margin-top: 40px;
-    border: 1px dashed var(--hair);
-    padding: 14px 16px;
-    background: #0c0c0c;
-  }
-  .notes h3 {
-    margin: 0 0 10px; font-size: 10px; letter-spacing: 0.22em;
-    text-transform: uppercase; color: var(--mute); font-weight: 500;
-  }
-  .notes ul { margin: 0; padding-left: 18px; }
-  .notes li { font-size: 12px; color: var(--fg-2); padding: 3px 0; }
-  .notes li b { color: var(--fg); font-weight: 500; }
+  .foot-brand { display: inline-flex; align-items: center; gap: 6px; }
+  .foot-brand img { display: block; }
 
   /* SPARKLINE */
   .spark { display: block; width: 100%; height: 56px; }
@@ -1115,5 +1102,210 @@
     padding: 2px 6px; border: 1px solid var(--hair-2); border-radius: 2px;
   }
   .blot-row .hash:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ─── ANIMATIONS ─────────────────────────────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes slideInRow {
+    from { opacity: 0; transform: translateX(-4px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes accentPulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--accent); }
+    50%      { opacity: 0.55; box-shadow: 0 0 2px rgba(16,185,129,0.4); }
+  }
+  @keyframes drawLine {
+    from { stroke-dashoffset: 800; }
+    to   { stroke-dashoffset: 0; }
+  }
+  @keyframes ribbonSweep {
+    0%   { transform: translateX(-100%); }
+    55%  { transform: translateX(140%); }
+    100% { transform: translateX(140%); }
+  }
+  @keyframes a2aPulse {
+    0%, 100% { box-shadow: 0 0 0 rgba(16,185,129,0); }
+    50%      { box-shadow: 0 0 22px -4px rgba(16,185,129,0.28); }
+  }
+  @keyframes scanSweep {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(220%); }
+  }
+
+  /* page-level entrance: top-to-bottom cascade */
+  .hero, .agent-head, .ipo-hero, .stepper, .stat-pair, .work {
+    animation: fadeUp 0.5s ease-out both;
+  }
+  .hero-stats          { animation: fadeUp 0.5s ease-out 0.06s both; }
+  .markets-head,
+  .section-h           { animation: fadeUp 0.4s ease-out 0.1s both; }
+  .panel,
+  .markets-table-wrap,
+  .markets-cards,
+  .acq-grid,
+  .ds-grid             { animation: fadeUp 0.5s ease-out 0.14s both; }
+
+  /* table / log / blotter rows: stagger-in like a fresh print */
+  .tbl tbody tr,
+  .log-row,
+  .blot-row,
+  .market-card         { animation: slideInRow 0.32s ease-out both; }
+  .tbl tbody tr:nth-child(1),
+  .log-row:nth-child(1),
+  .blot-row:nth-child(1),
+  .market-card:nth-child(1) { animation-delay: 0.04s; }
+  .tbl tbody tr:nth-child(2),
+  .log-row:nth-child(2),
+  .blot-row:nth-child(2),
+  .market-card:nth-child(2) { animation-delay: 0.08s; }
+  .tbl tbody tr:nth-child(3),
+  .log-row:nth-child(3),
+  .blot-row:nth-child(3),
+  .market-card:nth-child(3) { animation-delay: 0.12s; }
+  .tbl tbody tr:nth-child(4),
+  .log-row:nth-child(4),
+  .blot-row:nth-child(4),
+  .market-card:nth-child(4) { animation-delay: 0.16s; }
+  .tbl tbody tr:nth-child(5),
+  .log-row:nth-child(5),
+  .blot-row:nth-child(5),
+  .market-card:nth-child(5) { animation-delay: 0.20s; }
+  .tbl tbody tr:nth-child(n+6),
+  .log-row:nth-child(n+6),
+  .blot-row:nth-child(n+6),
+  .market-card:nth-child(n+6) { animation-delay: 0.24s; }
+
+  /* table row hover: smooth tint + accent ticker pull */
+  .tbl tbody tr td        { transition: background-color 0.18s ease-out, color 0.18s ease-out; }
+  .tbl tbody tr.click:hover td { background: #181818; }
+  .tbl tbody tr.click:hover .ticker { color: var(--accent); }
+
+  /* market-card mobile hover affordance */
+  .market-card            { transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease; }
+  .market-card:hover      { background: #131313; transform: translateX(2px); border-left: 2px solid var(--accent); padding-left: 10px; }
+
+  /* button micro-interactions: tiny lift + accent glow on primary */
+  .btn                    { transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease, box-shadow 0.18s ease; }
+  .btn:hover              { transform: translateY(-1px); }
+  .btn:active             { transform: translateY(0); }
+  .btn.primary:hover      { box-shadow: 0 0 18px -2px rgba(16,185,129,0.55); }
+
+  /* qty / preset buttons get the same treatment */
+  .qty-input button,
+  .preset-row button,
+  .markets-head .filters button { transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+
+  /* live indicator pulse */
+  .session .dot,
+  .foot .seal .dot        { animation: accentPulse 1.6s ease-in-out infinite; }
+
+  /* tee-verified ribbon: slow accent sweep across the chip */
+  .ribbon                 { position: relative; overflow: hidden; isolation: isolate; }
+  .ribbon::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(16,185,129,0.22) 50%, transparent 100%);
+    transform: translateX(-100%);
+    animation: ribbonSweep 4.8s ease-in-out infinite;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  /* sparklines draw-in like a live tape */
+  .spark path.line {
+    stroke-dasharray: 800; stroke-dashoffset: 800;
+    animation: drawLine 1.4s ease-out 0.25s forwards;
+  }
+  .spark path.area {
+    opacity: 0;
+    animation: fadeUp 0.6s ease-out 1.1s forwards;
+  }
+
+  /* hero & big-number "stamp in" */
+  .stat .value,
+  .agent-tk .tk,
+  .ipo-h1 .tk,
+  .fundraise .nums .big   { animation: fadeUp 0.55s ease-out 0.15s both; }
+
+  /* agent→agent thread: slow accent halo so the killer demo moment glows */
+  .thread                 { position: relative; animation: a2aPulse 2.6s ease-in-out infinite; }
+  .log-row.a2a            { transition: background 0.2s ease; }
+
+  /* receipt block reveal */
+  .attest-receipt         { animation: fadeUp 0.55s ease-out 0.15s both; position: relative; overflow: hidden; }
+  .attest-receipt::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    transform: translateX(-120%);
+    animation: scanSweep 1.6s ease-out 0.25s 1 forwards;
+  }
+
+  /* pay-card selection glow */
+  .pay-card               { transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease; }
+  .pay-card:hover         { transform: translateY(-1px); }
+  .pay-card.on            { box-shadow: 0 0 18px -4px rgba(16,185,129,0.4); }
+
+  /* stepper / stages: smoother active-state transitions */
+  .step                   { transition: background 0.3s ease; }
+  .stages .ph             { transition: background 0.3s ease; }
+  .stages .ph.active      { animation: fadeUp 0.35s ease-out both; }
+  .step.active::after     { transition: opacity 0.3s ease; }
+
+  /* progress fills get a faint leading-edge glow */
+  .tape-bar .fill,
+  .tape-big .fill         { box-shadow: 0 0 14px -2px rgba(16,185,129,0.35); }
+
+  /* respect motion-off and prefers-reduced-motion */
+  [data-motion="off"] .hero,
+  [data-motion="off"] .agent-head,
+  [data-motion="off"] .ipo-hero,
+  [data-motion="off"] .stepper,
+  [data-motion="off"] .stat-pair,
+  [data-motion="off"] .work,
+  [data-motion="off"] .hero-stats,
+  [data-motion="off"] .markets-head,
+  [data-motion="off"] .section-h,
+  [data-motion="off"] .panel,
+  [data-motion="off"] .markets-table-wrap,
+  [data-motion="off"] .markets-cards,
+  [data-motion="off"] .acq-grid,
+  [data-motion="off"] .ds-grid,
+  [data-motion="off"] .tbl tbody tr,
+  [data-motion="off"] .log-row,
+  [data-motion="off"] .blot-row,
+  [data-motion="off"] .market-card,
+  [data-motion="off"] .stat .value,
+  [data-motion="off"] .agent-tk .tk,
+  [data-motion="off"] .ipo-h1 .tk,
+  [data-motion="off"] .fundraise .nums .big,
+  [data-motion="off"] .attest-receipt,
+  [data-motion="off"] .session .dot,
+  [data-motion="off"] .foot .seal .dot,
+  [data-motion="off"] .thread,
+  [data-motion="off"] .ribbon::after,
+  [data-motion="off"] .attest-receipt::before,
+  [data-motion="off"] .stages .ph.active { animation: none; }
+  [data-motion="off"] .spark path.line { animation: none; stroke-dashoffset: 0; }
+  [data-motion="off"] .spark path.area { animation: none; opacity: 0.08; }
+  [data-motion="off"] .btn:hover,
+  [data-motion="off"] .pay-card:hover,
+  [data-motion="off"] .market-card:hover { transform: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero, .agent-head, .ipo-hero, .stepper, .stat-pair, .work,
+    .hero-stats, .markets-head, .section-h, .panel,
+    .markets-table-wrap, .markets-cards, .acq-grid, .ds-grid,
+    .tbl tbody tr, .log-row, .blot-row, .market-card,
+    .stat .value, .agent-tk .tk, .ipo-h1 .tk, .fundraise .nums .big,
+    .attest-receipt, .session .dot, .foot .seal .dot, .thread,
+    .ribbon::after, .attest-receipt::before, .stages .ph.active {
+      animation: none !important;
+    }
+    .spark path.line { animation: none; stroke-dashoffset: 0; }
+    .spark path.area { animation: none; opacity: 0.08; }
+    .btn, .pay-card, .market-card { transition: none; }
+    .btn:hover, .pay-card:hover, .market-card:hover { transform: none; }
+  }
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -10,6 +11,7 @@ const NAV: Array<{ href: string; label: string; match: (p: string) => boolean }>
   { href: "/agent/AUDIT", label: "agents", match: (p) => p.startsWith("/agent/") && !p.endsWith("/subscribe") && !p.endsWith("/acquire") },
   { href: "/agent/AUDIT/subscribe", label: "subscribe", match: (p) => p.endsWith("/subscribe") },
   { href: "/agent/AUDIT/acquire", label: "acquire", match: (p) => p.endsWith("/acquire") },
+  { href: "/launch", label: "launch", match: (p) => p.startsWith("/launch") },
 ];
 
 export function Masthead() {
@@ -17,8 +19,16 @@ export function Masthead() {
   return (
     <header className="masthead">
       <div className="masthead-inner">
-        <Link href="/" className="brand">
-          <span className="mark"><span>▌≡</span></span>
+        <Link href="/" className="brand" aria-label="slopstock home">
+          <span className="mark">
+            <Image
+              src="/slopstock-logo.png"
+              alt=""
+              width={28}
+              height={28}
+              priority
+            />
+          </span>
           <span className="word">slopstock</span>
           <span className="proto">stratum protocol · v0.3</span>
         </Link>
@@ -29,7 +39,6 @@ export function Masthead() {
               {n.label}
             </Link>
           ))}
-          <a href="#" className="muted">docs</a>
         </nav>
 
         <div className="session">
