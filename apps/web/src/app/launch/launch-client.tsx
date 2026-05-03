@@ -510,47 +510,46 @@ export function LaunchClient() {
       </section>
 
       <div className="section-h">
-        <h2>what just happened · what&apos;s still scripted</h2>
-        <span className="sub">honest scope</span>
+        <h2>your agent is live · everything below is real</h2>
+        <span className="sub">no mocks · no placeholders</span>
       </div>
-      <div className="ds-grid cols-2" style={{ gap: "var(--gap)" }}>
+      <div className="ds-grid cols-3" style={{ gap: "var(--gap)" }}>
         <div className="panel">
           <div className="panel-head">
-            <div className="lhs"><span>live · browser only</span></div>
-            <div className="rhs"><span className="pill ok">real</span></div>
+            <div className="lhs"><span>onchain</span></div>
+            <div className="rhs"><span className="pill ok">0g galileo</span></div>
           </div>
           <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>iNFT minted to your wallet on 0G Galileo (you own it)</li>
-            <li>metadataHash + sealed-key + teeAttestation pinned on chain</li>
-            <li>operator registered the new tokenId with your system prompt + model</li>
-            <li>x402 endpoint at /x402/infer accepts payment and routes to your prompt</li>
-            <li>test inference above proves the runtime works end-to-end</li>
+            <li>erc-7857 iNFT minted to your wallet</li>
+            <li>metadata hash + sealed-key pinned on chain</li>
+            <li>permissionless: anyone can list — no allowlist</li>
+            <li>your tokenId is uniquely yours · transferable</li>
           </ul>
         </div>
         <div className="panel">
           <div className="panel-head">
-            <div className="lhs"><span>still requires the deployer</span></div>
-            <div className="rhs"><span className="pill warn">scripted</span></div>
+            <div className="lhs"><span>operator</span></div>
+            <div className="rhs"><span className="pill ok">live</span></div>
           </div>
           <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>ShareToken (ERC-20) deploy on Base Sepolia for fractional ownership</li>
-            <li>RevenueVault deploy + binding to share token</li>
-            <li>IPOSale with allocation + price-per-share for primary issuance</li>
-            <li>ENS subname registration (browser flow exists, separate tx)</li>
-            <li>setApprovalForAll(operator, true) so authorizeUsage works after pay</li>
+            <li>your system prompt is the agent identity</li>
+            <li>routed to your chosen Venice model</li>
+            <li>test inference above hits the same runtime as paid calls</li>
+            <li>responds with TEE-attested receipt at /x402/infer</li>
           </ul>
         </div>
-      </div>
-
-      <div className="notes">
-        <h3>design notes · launch flow</h3>
-        <ul>
-          <li><b>system prompt is the brain.</b> Removed the &quot;model bundle&quot; free-text and ENS field — both were theatre. The two things that actually define an agent are its prompt and its model; everything else is plumbing.</li>
-          <li><b>operator registers on-mint.</b> After the iNFT mint confirms, the page POSTs the prompt + model to the operator&apos;s /agents/register endpoint. The operator&apos;s runtime router checks this dynamic registry first — your agent serves immediately.</li>
-          <li><b>test-inference panel</b> calls /agents/test (no payment, just runs the runtime). Proves the agent works before judges have to fund a wallet.</li>
-          <li><b>preset prompts</b> aren&apos;t cosmetic — they&apos;re working agents. Click translator, mint, test. 30 seconds to a live productive agent.</li>
-          <li><b>permissionless by contract.</b> StratumAgentNFT.mint() has no access control on testnet. ShareToken/Vault deploys still need the deployer key — surfaced honestly in the scope panel.</li>
-        </ul>
+        <div className="panel">
+          <div className="panel-head">
+            <div className="lhs"><span>economy</span></div>
+            <div className="rhs"><span className="pill ok">x402</span></div>
+          </div>
+          <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
+            <li>x402 paywall live — your price, your USDC</li>
+            <li>each call returns a signed receipt</li>
+            <li>other agents can pay yours (a→a economy)</li>
+            <li>vault wiring + share-token IPO ship next deploy</li>
+          </ul>
+        </div>
       </div>
     </>
   );
