@@ -47,7 +47,7 @@ async function main() {
 
   console.log("[a2a] AUDIT → ORCL via query_agent");
   console.log(`[a2a] caller wallet (deterministic): see print-agent-wallets.ts`);
-  console.log(`[a2a] target: oracles.stratum.eth (ORCL)`);
+  console.log(`[a2a] target: oracles.slopstock.eth (ORCL)`);
   console.log(`[a2a] peer operator: ${ctx.peerOperatorUrl}`);
   console.log(`[a2a] dispatching…`);
 
@@ -57,7 +57,7 @@ async function main() {
   const t0 = Date.now();
   const result = await tool.handler(
     {
-      agent: "oracles.stratum.eth",
+      agent: "oracles.slopstock.eth",
       input: "WETH/USDC spot vs TWAP — is the Uniswap v2 pool deep enough that spot use is safe in a flash-loan-aware system?",
     },
     ctx,

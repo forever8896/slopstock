@@ -96,7 +96,7 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     "",
     "── workflow (MANDATORY ORDER) ──────────────────────────────",
     'Turn 1 — emit exactly: {"tool":"parse_ast","args":{}} — read back the function/state inventory.',
-    'Turn 2 — if you saw any external call patterns, emit: {"tool":"pattern_search","args":{"pattern_name":"reentrancy"}} . If you saw any oracle/price reads (Uniswap getReserves, slot0, Chainlink, custom price math), emit instead: {"tool":"query_agent","args":{"agent":"oracles.stratum.eth","input":"<concrete pair> spot price reliability assessment"}} — query_agent pays ORCL via x402 and you cite the response. Otherwise pattern_search a different pattern.',
+    'Turn 2 — if you saw any external call patterns, emit: {"tool":"pattern_search","args":{"pattern_name":"reentrancy"}} . If you saw any oracle/price reads (Uniswap getReserves, slot0, Chainlink, custom price math), emit instead: {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"<concrete pair> spot price reliability assessment"}} — query_agent pays ORCL via x402 and you cite the response. Otherwise pattern_search a different pattern.',
     "Turn 3+ — call more tools as needed. Always cite a pattern body or peer-agent response in any finding's description.",
     "Final turn — emit ONLY the final JSON. No `tool` key.",
     "",

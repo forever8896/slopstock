@@ -259,13 +259,13 @@ const note: ToolDef = {
 const queryAgent: ToolDef = {
   name: "query_agent",
   description:
-    "Call another Slopstock-listed agent and pay them via x402. Use this when you need expertise outside your own — e.g. as the auditor, ask `oracles.stratum.eth` for the live USD price of a token before judging an oracle-using contract. The call is a real onchain USDC transfer from your own working wallet to the target's vault, then an HTTP POST to the target's operator. Their shareholders earn revenue from your call.",
+    "Call another Slopstock-listed agent and pay them via x402. Use this when you need expertise outside your own — e.g. as the auditor, ask `oracles.slopstock.eth` for the live USD price of a token before judging an oracle-using contract. The agent name is resolved through real ENS on Sepolia (PublicResolver addr record points to the agent's vault). The call is a real onchain USDC transfer from your own working wallet to the target's vault, then an HTTP POST to the target's operator. Their shareholders earn revenue from your call.",
   argsSchema: {
     type: "object",
     properties: {
       agent: {
         type: "string",
-        description: "ENS name (e.g. 'oracles.stratum.eth') or ticker (e.g. 'ORCL').",
+        description: "ENS name (e.g. 'oracles.slopstock.eth') or ticker (e.g. 'ORCL').",
       },
       input: { type: "string", description: "Free-text query for the target agent." },
     },
@@ -286,7 +286,7 @@ const queryAgent: ToolDef = {
       };
     }
 
-    const targetAddr = resolveAgentAddresses(target);
+    const targetAddr = await resolveAgentAddresses(target, ctx.clients.sepoliaPublic);
     if (!targetAddr) {
       return {
         text: `(unknown agent '${target}'); known: ${Object.keys(BASE_SEPOLIA_AGENTS).join(", ")}`,
@@ -413,9 +413,37 @@ const queryAgent: ToolDef = {
   },
 };
 
-function resolveAgentAddresses(nameOrTicker: string) {
+/**
+ * Resolve a ticker ("AUDIT") or ENS name ("auditor.slopstock.eth") to an
+ * agent's Base-side bundle.
+ *
+ * For `.eth` names we hit Sepolia ENS for real — `getEnsAddress` resolves the
+ * subname via the PublicResolver, and we then verify the resolved address
+ * matches one of our known vault addresses. If the resolver returns junk or
+ * an address we don't know, we refuse the call. That's the cryptographic
+ * binding: ENS isn't decorative, it's the agent identifier and a wrong
+ * resolver answer means a wrong payment recipient.
+ */
+async function resolveAgentAddresses(
+  nameOrTicker: string,
+  sepoliaPublic?: import("viem").PublicClient,
+) {
   const upper = nameOrTicker.toUpperCase();
   if (BASE_SEPOLIA_AGENTS[upper]) return BASE_SEPOLIA_AGENTS[upper];
+
+  if (nameOrTicker.toLowerCase().endsWith(".eth") && sepoliaPublic) {
+    try {
+      const resolved = await sepoliaPublic.getEnsAddress({ name: nameOrTicker.toLowerCase() });
+      if (resolved) {
+        for (const a of Object.values(BASE_SEPOLIA_AGENTS)) {
+          if (a.revenueVault.toLowerCase() === resolved.toLowerCase()) return a;
+        }
+      }
+    } catch {
+      // Fall through to local-name match below.
+    }
+  }
+
   for (const a of Object.values(BASE_SEPOLIA_AGENTS)) {
     if (a.ensName.toLowerCase() === nameOrTicker.toLowerCase()) return a;
   }

@@ -1,5 +1,5 @@
 /**
- * Render structured audit findings. The hero agent (auditor.stratum.eth)
+ * Render structured audit findings. The hero agent (auditor.slopstock.eth)
  * returns JSON shaped per docs/08-hero-agent.md §4.2; we parse defensively
  * and fall back to raw display if the JSON doesn't validate.
  */

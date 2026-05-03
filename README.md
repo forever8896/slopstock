@@ -34,7 +34,7 @@ We built the missing layer. Agents have measurable, attested, on-chain-verifiabl
 
 ## Why this is non-trivial
 
-Three agents — `auditor.stratum.eth`, `memer.stratum.eth`, `oracles.stratum.eth` — are deployed on the same iNFT protocol, running on **different runtimes**, transacting with each other in real USDC.
+Three agents — `auditor.slopstock.eth`, `memer.slopstock.eth`, `oracles.slopstock.eth` — are deployed on the same iNFT protocol, running on **different runtimes**, transacting with each other in real USDC.
 
 > **Headline proven on chain:** `AUDIT` autonomously paid `ORCL` 0.10 USDC mid-audit via the same x402 flow subscribers use. `ORCL`'s shareholders just earned revenue from `AUDIT`'s revenue. *([txHash](https://sepolia.basescan.org/tx/0x79c7771d2eab5f54d30b0d2c2b53831e80957df58a331b457d94d122c4feeb72), block 40820457)*
 
@@ -59,7 +59,7 @@ That's a stock exchange of productive AI workers. The `AgentRuntime` interface (
 ### Launch your own — permissionless ERC-7857 mint on 0G Galileo
 ![Launch](docs/screenshots/05-launch-viewport.png)
 
-### Live agent traffic — `oracles.stratum.eth` recent inferences, on-chain
+### Live agent traffic — `oracles.slopstock.eth` recent inferences, on-chain
 ![ORCL live tape](docs/screenshots/07-agent-ORCL-viewport.png)
 
 ---
@@ -76,8 +76,8 @@ We are targeting **5 sponsors / 8 prize buckets** with a single project. Each in
 | **Gensyn** | Best AXL application | $5k | Two AXL nodes — operator + subscriber — deliver inference P2P with no central API gateway. Localhost bridge today; mesh integration deferred. |
 | **KeeperHub** | Best Use of KeeperHub | $4.5k | Revenue distribution workflow: `RevenueVault.snap()` → keeper triggers → pro-rata to shareholders. Agent registered via ERC-8004. |
 | **KeeperHub** | Builder Feedback bounty | $500 | [`KEEPERHUB-FEEDBACK.md`](KEEPERHUB-FEEDBACK.md) — honest integration notes |
-| **ENS** | Best ENS for AI agents | $2.5k | Ticker subnames (`auditor.stratum.eth`, `memer.stratum.eth`, `oracles.stratum.eth`), ENSIP-25 registry, CCIP-Read |
-| **ENS** | Most Creative Use of ENS | $2.5k | CCIP-Read returns rotating treasury addresses; subnames issued to subscribers as **revocable API keys** that flip on whole-iNFT acquisition |
+| **ENS** | Best ENS for AI agents | $2.5k | `slopstock.eth` registered on Sepolia, three live subnames (`auditor.slopstock.eth`, `memer.slopstock.eth`, `oracles.slopstock.eth`) with `addr` records pointing to each agent's RevenueVault. The web app + operator both do real `getEnsAddress` lookups against Sepolia at request time — ENS is the agent identifier, not a string. CCIP-Read resolver contract built + tested. |
+| **ENS** | Most Creative Use of ENS | $2.5k | Subnames as **agent identifiers in agent-to-agent calls** — when AUDIT needs an oracle assessment mid-audit, its `query_agent` tool resolves `oracles.slopstock.eth` on Sepolia ENS, verifies the addr record matches the expected vault, and pays $0.10 USDC over x402. Same pattern issues subnames to subscribers as **revocable API keys** that flip on whole-iNFT acquisition. |
 
 The thesis: a project that lights up *all five* sponsor stacks meaningfully (not just logo-collecting) deserves to win across multiple buckets. Realistic capture: $5k–$15k.
 
@@ -136,9 +136,9 @@ Full design in [`docs/01-architecture.md`](docs/01-architecture.md).
 | Workstream | Status |
 |---|---|
 | Contracts | ✅ deployed on 0G Galileo + Base Sepolia, 83/83 tests green |
-| Hero agent (AUDIT) | ✅ `auditor.stratum.eth` — Hermes-pattern stateful (skills + memory + tool loop + autonomous skill creation) |
-| Meme agent (MEMER) | ✅ `memer.stratum.eth` — single-shot raw-model ruggability scout |
-| Oracle agent (ORCL) | ✅ `oracles.stratum.eth` — single-shot, **designed to be called by other agents** |
+| Hero agent (AUDIT) | ✅ `auditor.slopstock.eth` — Hermes-pattern stateful (skills + memory + tool loop + autonomous skill creation) |
+| Meme agent (MEMER) | ✅ `memer.slopstock.eth` — single-shot raw-model ruggability scout |
+| Oracle agent (ORCL) | ✅ `oracles.slopstock.eth` — single-shot, **designed to be called by other agents** |
 | AgentRuntime protocol | ✅ substrate-agnostic interface — `hermes` + `openai-compat` adapters shipped |
 | Multi-agent operator | ✅ one process serves all three agents on different runtimes simultaneously |
 | **Agent-to-agent x402** | ✅ **AUDIT pays ORCL on chain** ([txHash](https://sepolia.basescan.org/tx/0x79c7771d2eab5f54d30b0d2c2b53831e80957df58a331b457d94d122c4feeb72), block 40820457) |
@@ -147,7 +147,8 @@ Full design in [`docs/01-architecture.md`](docs/01-architecture.md).
 | Subscriber CLI | ✅ `discover` / `profile` / `infer` against real chain + operator |
 | Permissionless launch flow | ✅ `/launch` page mints ERC-7857 directly from the browser |
 | Indexer (Ponder) | ⏭ deferred — on-the-fly Transfer-walk works for v1 |
-| ENS gateway worker | ⏭ deferred — needs Cloudflare deploy + ENS ownership |
+| ENS subnames | ✅ `slopstock.eth` registered on Sepolia (deployer `0x29082098…59D10`); 3 subnames live with `addr` records pointing to vaults; web app + operator do real `getEnsAddress` against Sepolia |
+| ENS CCIP-Read gateway worker | ⏭ deferred — resolver contract is shipped + tested; Cloudflare deploy is the next step for rotating-address records |
 | 0G Compute Sealed Executor | ⏭ deferred — auth model not public; Ollama stand-in (any OpenAI-compat endpoint plugs in) |
 | AXL P2P transport | ⏭ deferred — sponsor surface |
 | Live revenue distribution | ⏭ deferred — vaults are immutably bound to Circle USDC; `TestnetUSDC` enables programmatic agent-to-agent. Distribution unblocks once a vault redeploy points at `TestnetUSDC`, or once subscribers fund vaults with Circle USDC manually. |
@@ -188,7 +189,7 @@ Artifacts at [`contracts/deployments/`](contracts/deployments/).
 
 ## The agents
 
-### `auditor.stratum.eth` · ticker **AUDIT** · tokenId 1
+### `auditor.slopstock.eth` · ticker **AUDIT** · tokenId 1
 
 A sealed Solidity audit agent. **Hermes-pattern runtime** — persistent skills directory, three-layer memory (FTS5 over messages + facts + task_log), four tools (`parse_ast`, `pattern_search`, `recall`, `note`), autonomous skill creation when a task involves ≥3 tool calls. Skills accumulate across audits — the iNFT's bundle hash advances with every meaningful task, and the marketplace value tracks the agent's accumulated competence.
 
@@ -197,16 +198,16 @@ A sealed Solidity audit agent. **Hermes-pattern runtime** — persistent skills 
 - **Pattern library:** reentrancy, access-control, oracle-manipulation, integer-overflow, signature-replay
 - **Output:** structured JSON findings with severity, location, suggested patch; receipt includes the full agent transcript (tools called, skills loaded, memory ops)
 
-### `memer.stratum.eth` · ticker **MEMER** · tokenId 2
+### `memer.slopstock.eth` · ticker **MEMER** · tokenId 2
 
 Quick ruggability check for meme-token contracts. **`openai-compat` runtime** — single-shot LLM call, no tools, no memory. Listed alongside AUDIT to demonstrate that the iNFT protocol is substrate-agnostic — different agents can run different runtimes against the same on-chain primitives.
 
 - **Cost:** $0.50 USDC per check
 - **Output:** 1–10 ruggability rating with rationale
 
-### `oracles.stratum.eth` · ticker **ORCL** · tokenId 3
+### `oracles.slopstock.eth` · ticker **ORCL** · tokenId 3
 
-Price-source agent. **Designed to be called by other agents.** When AUDIT is auditing a contract that reads a Uniswap reserve or Chainlink feed and needs to know whether the price is reliable, AUDIT's loop fires `query_agent("oracles.stratum.eth", ...)` — that pays ORCL **$0.10 USDC via the same x402 flow subscribers use**, gets a JSON price-source assessment back, and cites it in the finding. ORCL's shareholders earn revenue from AUDIT's revenue.
+Price-source agent. **Designed to be called by other agents.** When AUDIT is auditing a contract that reads a Uniswap reserve or Chainlink feed and needs to know whether the price is reliable, AUDIT's loop fires `query_agent("oracles.slopstock.eth", ...)` — that pays ORCL **$0.10 USDC via the same x402 flow subscribers use**, gets a JSON price-source assessment back, and cites it in the finding. ORCL's shareholders earn revenue from AUDIT's revenue.
 
 - **Cost:** $0.10 USDC per call
 - **Output:** `{ symbol, priceUsd, source, confidence, asOf, rationale }`
@@ -220,7 +221,7 @@ Price-source agent. **Designed to be called by other agents.** When AUDIT is aud
                                        │ (during the audit, decides:
                                        │  "I need a price oracle assessment")
                                        ▼
-                                     query_agent("oracles.stratum.eth",
+                                     query_agent("oracles.slopstock.eth",
                                                  "WETH/USDC TWAP reliability")
                                        │
                                        │  USDC.transfer(0.10) from

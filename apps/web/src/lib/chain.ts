@@ -4,7 +4,7 @@
  */
 
 import { createPublicClient, http, type Chain } from "viem";
-import { baseSepolia } from "viem/chains";
+import { baseSepolia, sepolia } from "viem/chains";
 import { ZG_GALILEO } from "@stratum/shared";
 
 export const zgGalileoChain = {
@@ -26,4 +26,11 @@ export const zgPublicClient = createPublicClient({
 export const basePublicClient = createPublicClient({
   chain: baseSepolia,
   transport: http("https://base-sepolia-rpc.publicnode.com"),
+});
+
+// Ethereum Sepolia — host of `slopstock.eth` and the ENS PublicResolver.
+// Used by `verifyEns()` to do real on-chain ENS resolution at SSR time.
+export const sepoliaPublicClient = createPublicClient({
+  chain: sepolia,
+  transport: http("https://ethereum-sepolia-rpc.publicnode.com"),
 });

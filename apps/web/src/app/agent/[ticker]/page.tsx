@@ -9,6 +9,7 @@ import {
   type Holder,
   type InferenceLog,
 } from "@/lib/agents";
+import { ensAppUrl, verifyEns, type EnsVerification } from "@/lib/ens";
 import { formatShares, formatUsdc, pctOf, relativeTime, shortAddr } from "@/lib/format";
 
 interface PageProps {
@@ -20,10 +21,11 @@ export default async function AgentDetailPage({ params }: PageProps) {
   const agent = await loadAgentDetail(ticker.toUpperCase());
   if (!agent) notFound();
 
-  const [holders, snapshots, inferences] = await Promise.all([
+  const [holders, snapshots, inferences, ensVerification] = await Promise.all([
     loadHolders(agent.ticker),
     loadSnapshots(agent.ticker),
     loadInferences(agent.ticker),
+    verifyEns(agent.ens, agent.contracts.vault),
   ]);
   const lastDistribution = snapshots[0];
   const marketCap = (agent.ipo.totalSupply * agent.ipo.pricePerShareUsdc) / 10n ** 18n;
@@ -40,6 +42,7 @@ export default async function AgentDetailPage({ params }: PageProps) {
           <div className="agent-tk">
             <div className="tk">{agent.ticker}</div>
             <div className="ens"><b>{agent.ens}</b></div>
+            <EnsBadge verification={ensVerification} ens={agent.ens} />
             <span className={`pill runtime-pill ${agent.runtime === "hermes" ? "hermes" : "raw"}`}>
               {agent.runtime === "hermes" ? "hermes" : "raw"}
             </span>
@@ -423,4 +426,27 @@ function Sparkline({ kind }: { kind: "line" | "bars" }) {
       </g>
     </svg>
   );
+}
+
+function EnsBadge({ verification, ens }: { verification: EnsVerification; ens: string }) {
+  if (verification.ok) {
+    return (
+      <a
+        className="pill ok"
+        href={ensAppUrl(ens)}
+        target="_blank"
+        rel="noreferrer noopener"
+        title={`Resolved on Sepolia ENS to ${verification.resolvedAddr}`}
+      >
+        ens ✓ sepolia ↗
+      </a>
+    );
+  }
+  if (verification.reason === "mismatch") {
+    return <span className="pill" title={`ENS resolved to ${verification.resolvedAddr} which doesn't match the vault`}>ens ⚠ mismatch</span>;
+  }
+  if (verification.reason === "rpc-error") {
+    return <span className="pill" title="Sepolia RPC unreachable; ENS verification skipped">ens —</span>;
+  }
+  return <span className="pill" title="No ENS addr record found for this name on Sepolia">ens unset</span>;
 }

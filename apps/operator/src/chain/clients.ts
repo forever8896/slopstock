@@ -25,9 +25,21 @@ const baseSepolia = {
   rpcUrls: { default: { http: ["https://base-sepolia-rpc.publicnode.com"] } },
 } as const satisfies Chain;
 
+// Ethereum Sepolia — host of slopstock.eth + ENS PublicResolver. Used by
+// query_agent to resolve `<label>.slopstock.eth` to the agent's vault, then
+// match the resolved address back to a tokenId. See `resolveAgentAddresses`
+// in runtime/hermes-tools.ts.
+const sepolia = {
+  id: 11_155_111,
+  name: "Ethereum Sepolia",
+  nativeCurrency: { decimals: 18, name: "Sepolia Ether", symbol: "ETH" },
+  rpcUrls: { default: { http: ["https://ethereum-sepolia-rpc.publicnode.com"] } },
+} as const satisfies Chain;
+
 export interface Clients {
   zgPublic: PublicClient;
   basePublic: PublicClient;
+  sepoliaPublic: PublicClient;
   zgWallet: WalletClient;
   baseWallet: WalletClient;
   account: ReturnType<typeof privateKeyToAccount>;
@@ -108,6 +120,11 @@ export function buildClients(config: OperatorConfig): Clients {
     transport: http(config.BASE_RPC_URL),
   });
 
+  const sepoliaPublic = createPublicClient({
+    chain: sepolia,
+    transport: http(config.SEPOLIA_RPC_URL),
+  });
+
   const account = privateKeyToAccount(config.OPERATOR_PRIVATE_KEY as `0x${string}`);
 
   const zgWallet = createWalletClient({
@@ -122,5 +139,5 @@ export function buildClients(config: OperatorConfig): Clients {
     transport: http(config.BASE_RPC_URL),
   });
 
-  return { zgPublic, basePublic, zgWallet, baseWallet, account };
+  return { zgPublic, basePublic, sepoliaPublic, zgWallet, baseWallet, account };
 }

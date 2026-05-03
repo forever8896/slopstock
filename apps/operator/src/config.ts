@@ -11,6 +11,8 @@ const envSchema = z.object({
   // Chains
   ZG_RPC_URL: z.string().url().default("https://evmrpc-testnet.0g.ai"),
   BASE_RPC_URL: z.string().url().default("https://base-sepolia-rpc.publicnode.com"),
+  // Ethereum Sepolia — needed for real ENS resolution (slopstock.eth lives here).
+  SEPOLIA_RPC_URL: z.string().url().default("https://ethereum-sepolia-rpc.publicnode.com"),
 
   // Default agent runtime kind for tokenIds that aren't in RUNTIME_BY_TOKEN_ID.
   // `hermes` = stateful skill-accumulating agent; `openai-compat` = single-shot.
