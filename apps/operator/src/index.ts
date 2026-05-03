@@ -24,6 +24,7 @@ import { loadConfig } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
 import { buildMcpServer } from "./mcp/server.ts";
 import { buildRuntimeRouter } from "./runtime/index.ts";
+import { initRegistry, listDynamicAgents } from "./store/dynamic-registry.ts";
 
 async function main() {
   const config = loadConfig();
@@ -47,6 +48,19 @@ async function main() {
   const runtimes = buildRuntimeRouter(config, clients);
   const receiptSigner = buildReceiptSigner(config);
   const agentInfo = buildAgentInfoCache(clients.zgPublic, agentRegistryAddress);
+
+  // Hydrate dynamic registry (agents minted via /launch) from disk so
+  // they survive operator restarts. Population happens on first read.
+  initRegistry(config.AGENTS_DATA_DIR);
+  const dynamicAgents = await listDynamicAgents();
+  if (dynamicAgents.length > 0) {
+    console.log(
+      `[stratum/operator] dynamic registry: ${dynamicAgents.length} permissionless agent(s) live`,
+    );
+    for (const a of dynamicAgents) {
+      console.log(`  · token #${a.tokenId} ${a.ticker} ${a.perCallHuman} (${a.model})`);
+    }
+  }
 
   // 1. MCP server (stdio transport for now; AXL bridge HTTP transport TODO).
   const mcpServer = buildMcpServer({

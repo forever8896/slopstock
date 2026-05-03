@@ -51,6 +51,26 @@ class DefaultRuntimeRouter implements RuntimeRouter {
 
   async forToken(tokenId: bigint): Promise<AgentRuntime> {
     const key = tokenId.toString();
+
+    // Dynamic registry: agents minted via /launch live here. Their
+    // runtime+model+systemPrompt come from the in-memory registry and
+    // override the static env-driven config. We don't cache these by
+    // tokenId because the registry can be updated at runtime — refetch.
+    const { getDynamicAgentSync } = await import("./dynamic-cache.ts");
+    const dyn = getDynamicAgentSync(tokenId);
+    if (dyn) {
+      const dynBackend = new OpenAICompatBackend({
+        baseUrl: this.config.COMPUTE_BASE_URL,
+        apiKey: this.config.COMPUTE_API_KEY,
+        model: dyn.model,
+      });
+      // Always openai-compat for dynamic agents v1 — Hermes-pattern
+      // requires seed files, which a browser-only mint can't pin.
+      return new OpenAICompatRuntime(dynBackend, {
+        systemPromptOverride: dyn.systemPrompt,
+      });
+    }
+
     const cached = this.runtimeCache.get(key);
     if (cached) return cached;
 

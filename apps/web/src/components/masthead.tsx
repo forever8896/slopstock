@@ -7,11 +7,8 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const NAV: Array<{ href: string; label: string; match: (p: string) => boolean }> = [
-  { href: "/", label: "markets", match: (p) => p === "/" },
-  { href: "/agent/AUDIT", label: "agents", match: (p) => p.startsWith("/agent/") && !p.endsWith("/subscribe") && !p.endsWith("/acquire") },
-  { href: "/agent/AUDIT/subscribe", label: "subscribe", match: (p) => p.endsWith("/subscribe") },
-  { href: "/agent/AUDIT/acquire", label: "acquire", match: (p) => p.endsWith("/acquire") },
-  { href: "/launch", label: "launch", match: (p) => p.startsWith("/launch") },
+  { href: "/", label: "markets", match: (p) => p === "/" || p.startsWith("/agent/") },
+  { href: "/launch", label: "launch agent", match: (p) => p.startsWith("/launch") },
 ];
 
 export function Masthead() {

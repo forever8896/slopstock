@@ -16,8 +16,9 @@ type Hex = `0x${string}`;
 
 const ZG_CHAIN_ID = ZG_GALILEO.chainId;
 const AGENT_NFT_ADDRESS = ZG_GALILEO.agentNft;
+const OPERATOR_URL =
+  process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
 
-// Inline mint ABI + Transfer event (the existing stratumAgentNftAbi doesn't expose mint).
 const mintAbi = [
   {
     type: "function",
@@ -43,9 +44,48 @@ const mintAbi = [
   },
 ] as const;
 
-const RUNTIME_OPTIONS = [
-  { value: "hermes", label: "hermes-pattern · skills + memory + tool loop" },
-  { value: "openai-compat", label: "raw · single-shot llm" },
+/** Models we know Venice serves and that the operator can route to. */
+const MODELS: Array<{ id: string; label: string; goodFor: string }> = [
+  { id: "qwen3-coder-480b-a35b-instruct-turbo", label: "qwen3-coder-480b · turbo", goodFor: "code, audits, structured json" },
+  { id: "qwen3-235b-a22b-instruct-2507", label: "qwen3-235b-a22b", goodFor: "general reasoning, instruction-following" },
+  { id: "claude-opus-4-7", label: "claude-opus-4-7", goodFor: "highest-quality reasoning, long context" },
+  { id: "google-gemma-4-31b-it", label: "gemma-4-31b-it", goodFor: "fast, cheap, decent quality" },
+  { id: "grok-41-fast", label: "grok-4.1-fast", goodFor: "broad knowledge, fast" },
+];
+
+const PRESET_PROMPTS: Array<{ key: string; label: string; prompt: string; model: string; description: string }> = [
+  {
+    key: "translator",
+    label: "translator",
+    prompt:
+      "You are a precise translation agent. The user gives you text in any language; respond with JSON {\"detected_lang\": \"...\", \"english\": \"...\", \"notes\": \"...\"}. Be literal, no editorializing. No prose outside the JSON.",
+    model: "qwen3-coder-480b-a35b-instruct-turbo",
+    description: "Translate any text to English with detected source language.",
+  },
+  {
+    key: "tldr",
+    label: "tl;dr",
+    prompt:
+      "You are a one-paragraph summarizer. The user gives you arbitrary text. Reply with JSON {\"summary\": \"<= 50 words\", \"key_points\": [\"...\"], \"sentiment\": \"positive|neutral|negative\"}. Nothing else.",
+    model: "google-gemma-4-31b-it",
+    description: "Summarize any text into a tight TL;DR with sentiment.",
+  },
+  {
+    key: "rugcheck",
+    label: "rug-check",
+    prompt:
+      "You are a meme-token ruggability scout. Given a token name + URL or description, respond with JSON {\"score\": 0-10, \"red_flags\": [\"...\"], \"verdict\": \"safe|caution|rug\"}. 10 = obvious rug. Be skeptical and concise.",
+    model: "qwen3-coder-480b-a35b-instruct-turbo",
+    description: "Score a meme token's rug-ability 0-10 with reasoning.",
+  },
+  {
+    key: "headline",
+    label: "headline-writer",
+    prompt:
+      "You are a Bloomberg-terminal headline writer. Given a topic, produce JSON {\"primary\": \"<= 70 chars all-caps\", \"secondary\": \"<= 120 chars\", \"tickers\": [\"...\"]}. Sharp, factual, no fluff.",
+    model: "claude-opus-4-7",
+    description: "Crisp Bloomberg-style headlines for any topic.",
+  },
 ];
 
 export function LaunchClient() {
@@ -55,28 +95,28 @@ export function LaunchClient() {
   const onZg = chainId === ZG_CHAIN_ID;
 
   const [ticker, setTicker] = useState("MYBOT");
-  const [name, setName] = useState("my new agent");
-  const [ens, setEns] = useState("mybot.stratum.eth");
   const [description, setDescription] = useState(
-    "a productive on-chain agent. shareholders earn revenue from each call.",
+    "translates any text to english and detects the source language.",
   );
-  const [model, setModel] = useState("qwen3-coder-480b · venice");
-  const [runtime, setRuntime] = useState("hermes");
-  const [perCall, setPerCall] = useState("0.50");
+  const [systemPrompt, setSystemPrompt] = useState(PRESET_PROMPTS[0]!.prompt);
+  const [model, setModel] = useState(MODELS[0]!.id);
+  const [perCall, setPerCall] = useState("0.10");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [registerError, setRegisterError] = useState<string | null>(null);
   const [mintedTokenId, setMintedTokenId] = useState<string | null>(null);
+  const [registered, setRegistered] = useState(false);
+  const [testInput, setTestInput] = useState("Bonjour, comment ça va aujourd'hui ?");
+  const [testRunning, setTestRunning] = useState(false);
+  const [testOutput, setTestOutput] = useState<string | null>(null);
 
   const { writeContractAsync, data: txHash } = useWriteContract();
   const {
     isLoading: txPending,
     isSuccess: txConfirmed,
     data: receipt,
-  } = useWaitForTransactionReceipt({
-    hash: txHash,
-    chainId: ZG_CHAIN_ID,
-  });
+  } = useWaitForTransactionReceipt({ hash: txHash, chainId: ZG_CHAIN_ID });
 
-  // Decode the Transfer log to extract the freshly-minted tokenId.
+  // Decode Transfer log to extract minted tokenId.
   useEffect(() => {
     if (!txConfirmed || !receipt) return;
     for (const log of receipt.logs) {
@@ -89,28 +129,58 @@ export function LaunchClient() {
           data: log.data,
         });
         const args = decoded.args as { from: Hex; to: Hex; tokenId: bigint };
-        if (args.from === "0x0000000000000000000000000000000000000000" && args.to.toLowerCase() === address?.toLowerCase()) {
+        if (
+          args.from === "0x0000000000000000000000000000000000000000" &&
+          args.to.toLowerCase() === address?.toLowerCase()
+        ) {
           setMintedTokenId(args.tokenId.toString());
           break;
         }
       } catch {
-        // skip non-Transfer logs
+        /* skip */
       }
     }
   }, [txConfirmed, receipt, address]);
 
+  // After mint, register with operator so the agent is queryable.
+  useEffect(() => {
+    if (!mintedTokenId || registered || !address || !txHash) return;
+    (async () => {
+      try {
+        const res = await fetch(`${OPERATOR_URL}/agents/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            tokenId: mintedTokenId,
+            ticker: ticker.toUpperCase(),
+            description,
+            systemPrompt,
+            model,
+            perCallSmallest: String(Math.round(Number(perCall) * 1e6)),
+            creator: address,
+            txHash,
+            runtime: "openai-compat",
+          }),
+        });
+        if (!res.ok) throw new Error(`operator ${res.status}: ${await res.text()}`);
+        setRegistered(true);
+      } catch (e) {
+        setRegisterError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [mintedTokenId, registered, address, txHash, ticker, description, systemPrompt, model, perCall]);
+
   const metadataPayload = useMemo(
     () => ({
       ticker: ticker.toUpperCase(),
-      name,
-      ens,
       description,
+      systemPromptHash: typeof window === "undefined" ? "" : keccak256(toBytes(systemPrompt)),
       model,
-      runtime,
+      runtime: "openai-compat",
       perCallUsdc: perCall,
       version: "stratum/agent-metadata/v1",
     }),
-    [ticker, name, ens, description, model, runtime, perCall],
+    [ticker, description, systemPrompt, model, perCall],
   );
   const metadataJson = JSON.stringify(metadataPayload, null, 2);
   const metadataHash = useMemo(() => keccak256(toBytes(metadataJson)), [metadataJson]);
@@ -121,13 +191,17 @@ export function LaunchClient() {
 
   async function mint() {
     if (!address || !onZg) return;
+    if (!systemPrompt.trim()) {
+      setErrorMsg("system prompt is required — it IS the agent");
+      return;
+    }
     setErrorMsg(null);
     setMintedTokenId(null);
+    setRegistered(false);
+    setRegisterError(null);
+    setTestOutput(null);
 
     try {
-      // Placeholder sealed key + tee attestation (testnet; real ERC-7857 fork
-      // parses TDX/SGX quotes). The contract keccaks the attestation bytes
-      // and stores that as the expected measurement.
       const sealedKey = stringToHex(`sealed:${ticker}:${Date.now()}`);
       const teeAttestation = stringToHex(`tee-attestation:${ticker}:${Date.now()}`);
 
@@ -140,6 +214,30 @@ export function LaunchClient() {
       });
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function runTest() {
+    if (!mintedTokenId || !registered) return;
+    setTestRunning(true);
+    setTestOutput(null);
+    try {
+      // Direct LLM-only test: call the operator's runtime via a debug shim.
+      // We don't go through x402 here — just exercise the registered system
+      // prompt + model so the user sees their agent talking.
+      const res = await fetch(`${OPERATOR_URL}/agents/test`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tokenId: mintedTokenId, input: testInput }),
+      });
+      const txt = await res.text();
+      if (!res.ok) throw new Error(`operator ${res.status}: ${txt.slice(0, 400)}`);
+      const body = JSON.parse(txt) as { output?: string };
+      setTestOutput(body.output ?? txt);
+    } catch (e) {
+      setTestOutput(`error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTestRunning(false);
     }
   }
 
@@ -157,29 +255,55 @@ export function LaunchClient() {
         <div className="hero-l">
           <div className="hero-tag">▌ slopstock · launch</div>
           <h1 className="hero-h1">
-            mint a productive<br />
+            ship a productive<br />
             <em>agent.</em>
           </h1>
           <p className="hero-sub">
-            anyone can list an agent. mint an erc-7857 inft on 0g galileo, pin its sealed bundle, and
-            you&apos;re live in the registry. fractionalization, vault, and ipo are configured against this
-            tokenId. the operator picks up new agents from the on-chain registry.
+            anyone can list. write a system prompt — that&apos;s the agent&apos;s brain. pick a venice
+            model. mint an erc-7857 inft. the operator picks it up immediately and serves your
+            prompt under the x402 paywall. revenue from each call accrues to whoever holds shares.
           </p>
           <div className="hero-meta">
             <span className="pill ok">▌ permissionless mint</span>
             <span className="pill">erc-7857</span>
-            <span className="pill">0g galileo</span>
-            <span className="pill">tee-sealed bundle</span>
+            <span className="pill">venice models</span>
+            <span className="pill">live in &lt;30s</span>
+          </div>
+
+          <div className="agent-event" style={{ marginTop: 14 }}>
+            <span className="glyph">↳</span>
+            <span>
+              <b>your system prompt</b> is the agent&apos;s identity. <span className="muted">model + prompt are stored on operator (registered after mint), hash pinned in the iNFT metadata on chain.</span>
+            </span>
           </div>
         </div>
 
         <div className="hero-r">
           <div className="loop-head">
-            <span>listing pipeline</span>
-            <span>4 stages</span>
+            <span>presets · or write your own</span>
+            <span>{PRESET_PROMPTS.length} starters</span>
           </div>
-          <div className="loop">
-            <pre className="ascii" dangerouslySetInnerHTML={{ __html: PIPELINE_ASCII }} />
+          <div style={{ display: "grid", gap: 8 }}>
+            {PRESET_PROMPTS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                className="pay-card"
+                style={{ textAlign: "left" }}
+                onClick={() => {
+                  setTicker(p.label.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+                  setDescription(p.description);
+                  setSystemPrompt(p.prompt);
+                  setModel(p.model);
+                }}
+              >
+                <div className="h">
+                  <span className="t">{p.label}</span>
+                  <span className="badge">load</span>
+                </div>
+                <div className="body">{p.description}</div>
+              </button>
+            ))}
           </div>
         </div>
       </section>
@@ -190,15 +314,13 @@ export function LaunchClient() {
             <h3>01 · agent identity</h3>
             <div className="ds-grid cols-2" style={{ gap: 12 }}>
               <Field label="ticker" value={ticker} onChange={setTicker} placeholder="MYBOT" />
-              <Field label="ens name" value={ens} onChange={setEns} placeholder="mybot.stratum.eth" />
-              <Field label="display name" value={name} onChange={setName} placeholder="my new agent" />
-              <Field label="per-call (usdc)" value={perCall} onChange={setPerCall} placeholder="0.50" />
+              <Field label="per-call (usdc)" value={perCall} onChange={setPerCall} placeholder="0.10" />
             </div>
             <div style={{ marginTop: 12 }}>
-              <div className="up">description</div>
+              <div className="up">description · shown on markets page</div>
               <textarea
                 className="req"
-                style={{ minHeight: 80, marginTop: 6 }}
+                style={{ minHeight: 60, marginTop: 6 }}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
@@ -206,47 +328,54 @@ export function LaunchClient() {
           </div>
 
           <div className="work-section">
-            <h3>02 · runtime + model</h3>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {RUNTIME_OPTIONS.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  className={`pay-card ${runtime === o.value ? "on" : ""}`}
-                  style={{ flex: "1 1 280px", textAlign: "left" }}
-                  onClick={() => setRuntime(o.value)}
-                >
-                  <div className="h">
-                    <span className="t">{o.value}</span>
-                    <span className="badge">{o.value === "hermes" ? "stateful" : "single-shot"}</span>
-                  </div>
-                  <div className="body">{o.label}</div>
-                </button>
-              ))}
+            <h3>
+              02 · system prompt{" "}
+              <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
+                THE BRAIN
+              </span>
+            </h3>
+            <div className="muted" style={{ marginBottom: 6, fontSize: 11 }}>
+              this is the agent. every paid call prepends this to the user&apos;s input. ask for JSON
+              output if you want structured responses (the runtime defaults to JSON mode).
             </div>
-            <div style={{ marginTop: 12 }}>
-              <Field label="model bundle" value={model} onChange={setModel} placeholder="qwen3-coder-480b · venice" />
+            <textarea
+              className="req"
+              style={{ minHeight: 220 }}
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              placeholder="You are a precise translation agent..."
+              spellCheck={false}
+            />
+            <div style={{ marginTop: 6, fontSize: 11, color: "var(--mute)" }}>
+              {systemPrompt.length} chars · keccak{" "}
+              <span className="acc">
+                {systemPrompt ? shortish(keccak256(toBytes(systemPrompt))) : "—"}
+              </span>
             </div>
           </div>
 
           <div className="work-section">
-            <h3>03 · sealed metadata preview</h3>
-            <div className="kv" style={{ marginTop: 4 }}>
-              <div className="k">metadata hash</div>
-              <div className="v acc">{shortish(metadataHash)}</div>
-              <div className="k">metadata uri</div>
-              <div className="v">data:application/json;base64,…</div>
-              <div className="k">sealed key</div>
-              <div className="v muted">[generated at mint · placeholder testnet]</div>
-              <div className="k">tee attestation</div>
-              <div className="v muted">[generated at mint · placeholder testnet]</div>
+            <h3>03 · model</h3>
+            <div style={{ display: "grid", gap: 6 }}>
+              {MODELS.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`pay-card ${model === m.id ? "on" : ""}`}
+                  style={{ textAlign: "left" }}
+                  onClick={() => setModel(m.id)}
+                >
+                  <div className="h">
+                    <span className="t">{m.label}</span>
+                    <span className="badge">{model === m.id ? "selected" : "click"}</span>
+                  </div>
+                  <div className="body">{m.goodFor}</div>
+                </button>
+              ))}
             </div>
-            <details style={{ marginTop: 10 }}>
-              <summary className="up" style={{ cursor: "pointer" }}>raw metadata json</summary>
-              <pre style={{ marginTop: 8, fontSize: 11, color: "var(--fg-2)", background: "#0a0a0a", padding: 10, border: "1px solid var(--hair-2)", overflow: "auto" }}>
-                {metadataJson}
-              </pre>
-            </details>
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--mute)" }}>
+              served via venice → operator routes inferences here
+            </div>
           </div>
 
           <div className="nav-btns">
@@ -258,12 +387,12 @@ export function LaunchClient() {
                   : txPending
                     ? `mining tx ${txHash ? shortish(txHash) : ""}`
                     : mintedTokenId
-                      ? `minted tokenId #${mintedTokenId}`
-                      : "minting calls StratumAgentNFT.mint() — you pay 0G gas, receive an iNFT"}
+                      ? `minted #${mintedTokenId}${registered ? " · registered" : registerError ? " · register failed" : " · registering…"}`
+                      : "mint inft on 0g galileo · register with operator · ready in <30s"}
             </span>
             <div style={{ display: "flex", gap: 10 }}>
               {!isConnected ? (
-                <button className="btn" disabled>connect wallet first</button>
+                <button className="btn" disabled>connect first</button>
               ) : !onZg ? (
                 <button className="btn" onClick={() => switchChain({ chainId: ZG_CHAIN_ID })}>
                   switch to 0g galileo
@@ -274,7 +403,7 @@ export function LaunchClient() {
                   onClick={mint}
                   disabled={txPending || Boolean(mintedTokenId)}
                 >
-                  {txPending ? "minting…" : mintedTokenId ? "minted ✓" : "mint inft →"}
+                  {txPending ? "minting…" : mintedTokenId ? "minted ✓" : "mint & register →"}
                 </button>
               )}
             </div>
@@ -284,42 +413,49 @@ export function LaunchClient() {
               {errorMsg}
             </div>
           ) : null}
+          {registerError ? (
+            <div style={{ padding: "10px 20px", color: "var(--amber)", fontSize: 12, borderTop: "1px solid var(--hair-2)" }}>
+              register failed: {registerError} — iNFT was minted, you can manually register later.
+            </div>
+          ) : null}
         </div>
 
         <div className="work-r">
           <div className="seal-stage">
-            <h3>tee · what gets minted</h3>
+            <h3>tee · what gets minted + registered</h3>
             <div className="seal-anim" style={{ minHeight: 0 }}>
               <pre style={{ margin: 0, fontFamily: "inherit", fontSize: 12, lineHeight: 1.45, color: "var(--fg-2)" }}>
 {`  ┌─────────────────────────────────────┐
-  │ erc-7857 inft · permissionless mint │
+  │ erc-7857 inft · 0g galileo          │
+  │   metadataHash · keccak(meta json)  │
+  │   sealedKey    · placeholder        │
+  │   teeAttest    · placeholder        │
   │                                     │
-  │   to               · your wallet    │
-  │   metadataHash     · keccak(meta)   │
-  │   metadataURI      · data: uri      │
-  │   sealedKey        · tee-bound      │
-  │   teeAttestation   · tdx quote      │
+  │ operator registry · post-mint       │
+  │   tokenId      · ${mintedTokenId ? `#${mintedTokenId}`.padEnd(20) : "(after mint)         "}│
+  │   systemPrompt · ${(systemPrompt.length + " chars").padEnd(20)}│
+  │   model        · ${truncFit(model, 20)}│
+  │   perCall      · $${perCall.padEnd(19)}│
   │                                     │
-  │ contract derives:                   │
-  │   tokenId          · ++_nextId      │
-  │   measurement      · keccak(att.)   │
-  │   ownerOf          · = to           │
+  │ available at /x402/infer immediately│
   └─────────────────────────────────────┘`}
               </pre>
             </div>
           </div>
 
-          {mintedTokenId ? (
+          {mintedTokenId && registered ? (
             <div className="attest-receipt" style={{ display: "block" }}>
               <div className="head">
-                <span className="t">minted · onchain</span>
-                <span className="muted" style={{ fontSize: 10 }}>0g galileo</span>
+                <span className="t">live · permissionless agent registered</span>
+                <span className="muted" style={{ fontSize: 10 }}>0g galileo · operator</span>
               </div>
-              <h2>your agent is live.</h2>
+              <h2>your agent is serving.</h2>
               <div className="body">
-                tokenId <b className="acc">#{mintedTokenId}</b> minted to your wallet. the iNFT is now in
-                your possession. revenue and shares are not yet wired — see next steps below.
+                tokenId <b className="acc">#{mintedTokenId}</b> minted to your wallet AND registered
+                with the operator. the system prompt + model are now live behind x402. test it below
+                without paying — direct runtime call, same path the paid x402 endpoint uses.
               </div>
+
               <div className="grid">
                 <div className="c">
                   <div className="l">tokenId</div>
@@ -334,50 +470,74 @@ export function LaunchClient() {
                   <div className="v">
                     {txHash ? (
                       <a className="acc" href={`https://chainscan-galileo.0g.ai/tx/${txHash}`} target="_blank" rel="noreferrer">
-                        chainscan-galileo ↗
+                        chainscan ↗
                       </a>
                     ) : "—"}
                   </div>
                 </div>
                 <div className="c">
-                  <div className="l">contract</div>
-                  <div className="v">{shortish(AGENT_NFT_ADDRESS)}</div>
+                  <div className="l">operator</div>
+                  <div className="v acc">/agents/{mintedTokenId}</div>
                 </div>
+              </div>
+
+              <div className="out" style={{ marginTop: 14 }}>
+                <h4>test inference · no payment required</h4>
+                <textarea
+                  className="req"
+                  style={{ minHeight: 60 }}
+                  value={testInput}
+                  onChange={(e) => setTestInput(e.target.value)}
+                  placeholder="ask your new agent something…"
+                />
+                <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center" }}>
+                  <button className="btn primary" onClick={runTest} disabled={testRunning || !testInput.trim()}>
+                    {testRunning ? "running…" : "run inference →"}
+                  </button>
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    bypasses x402 — goes straight to your agent&apos;s runtime
+                  </span>
+                </div>
+                {testOutput ? (
+                  <pre style={{ marginTop: 12, padding: 10, background: "#0a0a0a", border: "1px solid var(--hair-2)", color: "var(--fg-2)", fontSize: 12, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                    {testOutput}
+                  </pre>
+                ) : null}
               </div>
             </div>
           ) : null}
         </div>
       </section>
 
-      {/* WHAT'S STILL NEEDED — honest scope panel */}
       <div className="section-h">
-        <h2>next steps · full listing</h2>
-        <span className="sub">what you minted vs. what AUDIT/MEMER/ORCL have today</span>
+        <h2>what just happened · what&apos;s still scripted</h2>
+        <span className="sub">honest scope</span>
       </div>
       <div className="ds-grid cols-2" style={{ gap: "var(--gap)" }}>
         <div className="panel">
           <div className="panel-head">
-            <div className="lhs"><span>what just happened</span><span className="tag muted">browser-only</span></div>
-            <div className="rhs"><span className="pill ok">live</span></div>
+            <div className="lhs"><span>live · browser only</span></div>
+            <div className="rhs"><span className="pill ok">real</span></div>
           </div>
           <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>iNFT minted on 0G Galileo (you own tokenId)</li>
-            <li>metadata hash + sealed-key placeholder pinned on chain</li>
-            <li>measurement derived from teeAttestation bytes (keccak)</li>
-            <li>ENS name embedded in metadata (ENSIP-25 registration is a separate tx)</li>
+            <li>iNFT minted to your wallet on 0G Galileo (you own it)</li>
+            <li>metadataHash + sealed-key + teeAttestation pinned on chain</li>
+            <li>operator registered the new tokenId with your system prompt + model</li>
+            <li>x402 endpoint at /x402/infer accepts payment and routes to your prompt</li>
+            <li>test inference above proves the runtime works end-to-end</li>
           </ul>
         </div>
         <div className="panel">
           <div className="panel-head">
-            <div className="lhs"><span>what still requires the deployer</span><span className="tag muted">scripted</span></div>
-            <div className="rhs"><span className="pill warn">deferred</span></div>
+            <div className="lhs"><span>still requires the deployer</span></div>
+            <div className="rhs"><span className="pill warn">scripted</span></div>
           </div>
           <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>ShareToken (ERC-20) deploy on Base Sepolia</li>
-            <li>RevenueVault deploy + bind to vault address</li>
-            <li>IPOSale deploy with allocation + price-per-share</li>
-            <li>operator config: add tokenId to RUNTIME_BY_TOKEN_ID + system prompt</li>
-            <li>setApprovalForAll(operator, true) so authorizeUsage works on subscribe</li>
+            <li>ShareToken (ERC-20) deploy on Base Sepolia for fractional ownership</li>
+            <li>RevenueVault deploy + binding to share token</li>
+            <li>IPOSale with allocation + price-per-share for primary issuance</li>
+            <li>ENS subname registration (browser flow exists, separate tx)</li>
+            <li>setApprovalForAll(operator, true) so authorizeUsage works after pay</li>
           </ul>
         </div>
       </div>
@@ -385,11 +545,11 @@ export function LaunchClient() {
       <div className="notes">
         <h3>design notes · launch flow</h3>
         <ul>
-          <li><b>permissionless by contract.</b> StratumAgentNFT.mint() has no access control on testnet — the protocol is genuinely open. Anyone with 0G gas can list.</li>
-          <li><b>browser is honest.</b> The mint button does what it says — one transaction, one iNFT. The page does not pretend to deploy ShareToken/Vault/IPO; those are explicitly listed as deferred (deployer-scripted today, automated post-hackathon).</li>
-          <li><b>identity panel mirrors the markets row.</b> Ticker, ENS, description, runtime — same fields a judge sees on the markets page. The mental model is &quot;fill the row, get the row.&quot;</li>
-          <li><b>metadata is sealed bundle, not free-form.</b> JSON shape matches AGENT_METADATA in lib — keccak determines the on-chain hash. Real ERC-7857 fork swaps the placeholder attestation for a parsed TDX/SGX quote.</li>
-          <li><b>next-steps panel is part of the design</b>, not an afterthought. Every prototype lies about what&apos;s real; we surface the gap explicitly. That&apos;s the same energy as the &quot;deferred&quot; list in the README.</li>
+          <li><b>system prompt is the brain.</b> Removed the &quot;model bundle&quot; free-text and ENS field — both were theatre. The two things that actually define an agent are its prompt and its model; everything else is plumbing.</li>
+          <li><b>operator registers on-mint.</b> After the iNFT mint confirms, the page POSTs the prompt + model to the operator&apos;s /agents/register endpoint. The operator&apos;s runtime router checks this dynamic registry first — your agent serves immediately.</li>
+          <li><b>test-inference panel</b> calls /agents/test (no payment, just runs the runtime). Proves the agent works before judges have to fund a wallet.</li>
+          <li><b>preset prompts</b> aren&apos;t cosmetic — they&apos;re working agents. Click translator, mint, test. 30 seconds to a live productive agent.</li>
+          <li><b>permissionless by contract.</b> StratumAgentNFT.mint() has no access control on testnet. ShareToken/Vault deploys still need the deployer key — surfaced honestly in the scope panel.</li>
         </ul>
       </div>
     </>
@@ -438,10 +598,7 @@ function shortish(s: string, chars = 8): string {
   return `${s.slice(0, 2 + chars)}…${s.slice(-chars)}`;
 }
 
-const PIPELINE_ASCII = `   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-   │  <span class="acc">mint</span>    │ ▶  │  shares  │ ▶  │   ipo    │ ▶  │ operator │
-   │  inft    │    │  erc-20  │    │   sale   │    │  config  │
-   └──────────┘    └──────────┘    └──────────┘    └──────────┘
-        <span class="acc">▲ you do this here</span>           <span class="mu">▲ deferred / scripted</span>
-
-   <span class="mu">erc-7857 ─── erc-20 ────── primary issuance ─── live</span>`;
+function truncFit(s: string, w: number): string {
+  if (s.length <= w) return s.padEnd(w);
+  return s.slice(0, w - 1) + "…";
+}

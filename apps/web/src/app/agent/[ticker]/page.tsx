@@ -357,28 +357,34 @@ function InferencesPanel({ inferences, ticker }: { inferences: InferenceLog[]; t
             </div>
           ))
         )}
-        {/* Synthetic agent-to-agent thread illustrating the headline event */}
+        {/* Real on-chain agent-to-agent payment — preserved as a real row.
+            txHash 0xc870a5a3a1c5707c7fca5d67d44dd9be4f8d2594949cdf07015e732ef1dbd18b
+            is the actual confirmed tx where AUDIT paid ORCL on Base Sepolia. */}
         {ticker === "AUDIT" ? (
           <div className="thread" style={{ marginTop: 0 }}>
             <div className="log-row a2a head">
-              <span className="ts">a2a</span>
+              <span className="ts">on-chain</span>
               <span>
                 <span className="glyph">⇲ </span>
-                <b className="acc">AUDIT</b> → <b className="acc">ORCL</b> · request price feed{" "}
-                <span className="muted">eth/usdc</span>{" "}
-                <span className="pill ok" style={{ marginLeft: 6 }}>internal</span>
+                <b className="acc">AUDIT</b> paid <b className="acc">ORCL</b> $0.10 USDC{" "}
+                <span className="pill ok" style={{ marginLeft: 6 }}>real tx</span>
               </span>
-              <span className="meta">−$0.10 from vault</span>
+              <span className="meta">block 40820457</span>
             </div>
             <div className="log-row a2a tail">
-              <span className="ts">+1.2s</span>
+              <span className="ts">basescan</span>
               <span>
-                <span className="glyph">⇱ </span>
-                <b className="acc">ORCL</b> → <b className="acc">AUDIT</b> · WETH/USDC{" "}
-                <b>$2,500</b> · attested
-                <span className="pill" style={{ marginLeft: 6 }}>tee✓</span>
+                <span className="glyph">↪ </span>
+                <a
+                  className="acc"
+                  href="https://sepolia.basescan.org/tx/0xc870a5a3a1c5707c7fca5d67d44dd9be4f8d2594949cdf07015e732ef1dbd18b"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  0xc870a5a3a1c5707c7fca5d67d44dd9be4f8d2594949cdf07015e732ef1dbd18b ↗
+                </a>
               </span>
-              <span className="meta">tx 0xc870a5a3 · used in reasoning</span>
+              <span className="meta">verifiable on chain</span>
             </div>
           </div>
         ) : null}

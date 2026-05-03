@@ -49,7 +49,21 @@ const FALLBACK: AgentPricing = {
   description: "Unconfigured agent.",
 };
 
+import { getDynamicAgentSync } from "./dynamic-cache.ts";
+
 export function priceForToken(tokenId: bigint): AgentPricing {
+  // Dynamic registry (agents minted via /launch) takes precedence so a
+  // newly-minted agent serves immediately without an env restart.
+  const dyn = getDynamicAgentSync(tokenId);
+  if (dyn) {
+    return {
+      ticker: dyn.ticker,
+      perCallSmallest: dyn.perCallSmallest,
+      perCallHuman: dyn.perCallHuman,
+      modelBase: dyn.model,
+      description: dyn.description,
+    };
+  }
   return PRICING_BY_TOKEN[tokenId.toString()] ?? FALLBACK;
 }
 

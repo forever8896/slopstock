@@ -123,37 +123,38 @@ export default async function Home() {
             </tr>
           </thead>
           <tbody>
-            {agents.map((a) => (
-              <tr key={a.ticker} className="click" onClick={undefined}>
-                <td className="ticker">
-                  <Link href={`/agent/${a.ticker}`} style={{ display: "block" }}>
-                    {a.ticker}
-                  </Link>
-                </td>
-                <td>
-                  <Link href={`/agent/${a.ticker}`} style={{ display: "block", color: "inherit" }}>
-                    <div>{AGENT_NAMES[a.ticker] ?? a.ticker.toLowerCase()}</div>
-                    <div className="ens">{a.ens}</div>
-                  </Link>
-                </td>
-                <td>
-                  <span
-                    className={`pill runtime-pill ${a.runtime === "hermes" ? "hermes" : "raw"}`}
-                  >
-                    {a.runtime === "hermes" ? "hermes" : "raw"}
-                  </span>
-                </td>
-                <td className="num">${formatUsdc(a.pricePerShareUsdc, 2)}</td>
-                <td className="num">{a.perCallHuman}</td>
-                <td className="num pos">${formatUsdc(a.cumulativeRevenueUsdc, 2)}</td>
-                <td className="num">{a.callsToday}</td>
-                <td>
-                  <Link href={`/agent/${a.ticker}`} className="acc">
-                    →
-                  </Link>
-                </td>
-              </tr>
-            ))}
+            {agents.map((a) => {
+              const isDynamic = "permissionless" in a;
+              const href = isDynamic ? `/launch` : `/agent/${a.ticker}`;
+              return (
+                <tr key={`${a.tokenId}-${a.ticker}`} className="click">
+                  <td className="ticker">
+                    <Link href={href} style={{ display: "block" }}>{a.ticker}</Link>
+                  </td>
+                  <td>
+                    <Link href={href} style={{ display: "block", color: "inherit" }}>
+                      <div>{AGENT_NAMES[a.ticker] ?? (isDynamic ? "permissionless agent · just minted" : a.ticker.toLowerCase())}</div>
+                      <div className="ens">{a.ens}</div>
+                    </Link>
+                  </td>
+                  <td>
+                    <span className={`pill runtime-pill ${a.runtime === "hermes" ? "hermes" : "raw"}`}>
+                      {a.runtime === "hermes" ? "hermes" : "raw"}
+                    </span>
+                    {isDynamic ? (
+                      <span className="pill ok" style={{ marginLeft: 6 }}>permissionless</span>
+                    ) : null}
+                  </td>
+                  <td className="num">{isDynamic ? "—" : `$${formatUsdc(a.pricePerShareUsdc, 2)}`}</td>
+                  <td className="num">{a.perCallHuman}</td>
+                  <td className="num pos">{isDynamic ? "—" : `$${formatUsdc(a.cumulativeRevenueUsdc, 2)}`}</td>
+                  <td className="num">{a.callsToday}</td>
+                  <td>
+                    <Link href={href} className="acc">→</Link>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -75,8 +75,52 @@ export interface InferenceLog {
 
 const SECONDS_PER_DAY = 86_400;
 
-export async function listAgents(): Promise<AgentSummary[]> {
-  return Promise.all(Object.keys(BASE_SEPOLIA_AGENTS).map(loadAgentSummary));
+export interface DynamicAgentSummary extends AgentSummary {
+  permissionless: true;
+}
+
+export async function listAgents(): Promise<Array<AgentSummary | DynamicAgentSummary>> {
+  const [staticAgents, dynamic] = await Promise.all([
+    Promise.all(Object.keys(BASE_SEPOLIA_AGENTS).map(loadAgentSummary)),
+    listDynamicAgentSummaries(),
+  ]);
+  return [...staticAgents, ...dynamic];
+}
+
+async function listDynamicAgentSummaries(): Promise<DynamicAgentSummary[]> {
+  const operatorUrl = process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
+  try {
+    const res = await fetch(`${operatorUrl}/agents`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as {
+      agents: Array<{
+        tokenId: string;
+        ticker: string;
+        description: string;
+        model: string;
+        perCallSmallest: string;
+        perCallHuman: string;
+        runtime: "openai-compat" | "hermes";
+      }>;
+    };
+    return body.agents.map((a) => ({
+      ticker: a.ticker,
+      ens: `${a.ticker.toLowerCase()}.permissionless`,
+      tokenId: BigInt(a.tokenId),
+      perCallUsdc: BigInt(a.perCallSmallest),
+      perCallHuman: a.perCallHuman,
+      pricePerShareUsdc: 0n,
+      cumulativeRevenueUsdc: 0n,
+      callsToday: 0,
+      runtime: a.runtime,
+      permissionless: true as const,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export async function loadAgentSummary(ticker: string): Promise<AgentSummary> {

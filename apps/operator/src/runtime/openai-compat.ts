@@ -38,22 +38,35 @@ async function loadSystemPrompt(tokenId: bigint): Promise<string> {
   return prompt;
 }
 
+export interface OpenAICompatRuntimeOpts {
+  /** Override the seed-file system prompt — used by the dynamic registry
+   *  so /launch agents serve their user-defined personality immediately. */
+  systemPromptOverride?: string;
+}
+
 export class OpenAICompatRuntime implements AgentRuntime {
   readonly kind = "openai-compat" as const;
 
-  constructor(private readonly backend: LLMBackend) {}
+  constructor(
+    private readonly backend: LLMBackend,
+    private readonly opts: OpenAICompatRuntimeOpts = {},
+  ) {}
 
   async load(_opts: { tokenId: bigint }): Promise<void> {
     // No state to hydrate.
   }
 
   async bundleHash(_tokenId: bigint): Promise<Hex> {
-    // The "bundle" is the backend's identity — no persisted state.
-    return keccak256(toHex(new TextEncoder().encode(`runtime=openai-compat:backend=${this.backend.kind}:${this.backend.description}`)));
+    // The "bundle" is the backend's identity + the system prompt. For
+    // dynamic agents the prompt is the only differentiator, so include it.
+    const promptTag = this.opts.systemPromptOverride
+      ? keccak256(toHex(new TextEncoder().encode(this.opts.systemPromptOverride))).slice(2, 14)
+      : "static";
+    return keccak256(toHex(new TextEncoder().encode(`runtime=openai-compat:backend=${this.backend.kind}:${this.backend.description}:prompt=${promptTag}`)));
   }
 
   async runTask(req: AgentTaskInput): Promise<AgentTaskOutput> {
-    const systemPrompt = await loadSystemPrompt(req.tokenId);
+    const systemPrompt = this.opts.systemPromptOverride ?? (await loadSystemPrompt(req.tokenId));
     const tStart = Math.floor(Date.now() / 1000);
 
     const llm = await this.backend.call({

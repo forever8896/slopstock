@@ -24,6 +24,11 @@ import type { AgentInfoCache, Clients } from "../chain/clients.ts";
 import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
 import { handleProfile } from "../mcp/tools.ts";
+import {
+  listDynamicAgents,
+  registerDynamicAgent,
+  type DynamicAgent,
+} from "../store/dynamic-registry.ts";
 import type { RuntimeRouter } from "../runtime/index.ts";
 import { RuntimeError } from "../runtime/index.ts";
 import { listReceipts, recordReceipt } from "../store/receipts.ts";
@@ -91,9 +96,113 @@ export function startHttpServer(deps: HttpDeps) {
         return withCors(await handleInfer(req, deps));
       }
 
+      if (url.pathname === "/agents/register" && req.method === "POST") {
+        return withCors(await handleRegisterAgent(req));
+      }
+
+      if (url.pathname === "/agents" && req.method === "GET") {
+        return withCors(await handleListAgents());
+      }
+
+      if (url.pathname === "/agents/test" && req.method === "POST") {
+        return withCors(await handleTestAgent(req, deps));
+      }
+
       return withCors(new Response("not found", { status: 404 }));
     },
   });
+}
+
+async function handleRegisterAgent(req: Request): Promise<Response> {
+  let body: Partial<DynamicAgent>;
+  try {
+    body = (await req.json()) as Partial<DynamicAgent>;
+  } catch {
+    return json({ error: "invalid json body" }, { status: 400 });
+  }
+
+  const required: Array<keyof DynamicAgent> = [
+    "tokenId",
+    "ticker",
+    "description",
+    "systemPrompt",
+    "model",
+    "perCallSmallest",
+    "creator",
+    "txHash",
+  ];
+  for (const k of required) {
+    if (!body[k]) return json({ error: `missing field: ${k}` }, { status: 400 });
+  }
+
+  const perCallSmallest = body.perCallSmallest!;
+  const perCallHuman =
+    body.perCallHuman ??
+    `$${(Number(perCallSmallest) / 1e6).toFixed(2)}`;
+
+  // First-class shape, populated regardless of what the client sent.
+  const record: DynamicAgent = {
+    tokenId: String(body.tokenId),
+    ticker: String(body.ticker).toUpperCase(),
+    description: String(body.description),
+    systemPrompt: String(body.systemPrompt),
+    model: String(body.model),
+    perCallSmallest,
+    perCallHuman,
+    runtime: body.runtime === "hermes" ? "hermes" : "openai-compat",
+    creator: String(body.creator),
+    txHash: String(body.txHash),
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+
+  await registerDynamicAgent(record);
+  return json({ ok: true, agent: record });
+}
+
+async function handleListAgents(): Promise<Response> {
+  const agents = await listDynamicAgents();
+  return json({ agents });
+}
+
+/**
+ * Test endpoint: runs the agent's runtime without payment, used by the
+ * /launch page so a creator can verify their freshly-minted agent works.
+ * No receipts, no chain writes — just exercise the runtime.
+ */
+async function handleTestAgent(req: Request, deps: HttpDeps): Promise<Response> {
+  let body: { tokenId?: string | number; input?: string };
+  try {
+    body = (await req.json()) as { tokenId?: string | number; input?: string };
+  } catch {
+    return json({ error: "invalid json body" }, { status: 400 });
+  }
+  if (body.tokenId === undefined || body.tokenId === null || !body.input) {
+    return json({ error: "tokenId and input required" }, { status: 400 });
+  }
+  const tokenId = typeof body.tokenId === "string" ? BigInt(body.tokenId) : BigInt(body.tokenId);
+  const subscriber: `0x${string}` = "0x0000000000000000000000000000000000000000";
+
+  try {
+    const runtime = await deps.runtimes.forToken(tokenId);
+    await runtime.load({ tokenId });
+    const out = await runtime.runTask({
+      tokenId,
+      subscriber,
+      input: body.input,
+      paymentReceiptId: "test-no-payment",
+    });
+    return json({
+      ok: true,
+      output: out.output,
+      model: out.model,
+      tokenId: tokenId.toString(),
+    });
+  } catch (err) {
+    return json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
+  }
 }
 
 async function handleProfileRoute(tokenIdStr: string, deps: HttpDeps): Promise<Response> {
