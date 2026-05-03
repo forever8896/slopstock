@@ -89,3 +89,4 @@ ml/eval/results/
 # OS
 .DS_Store
 *.swp
+.vercel

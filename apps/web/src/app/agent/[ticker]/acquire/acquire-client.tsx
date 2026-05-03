@@ -391,16 +391,6 @@ export function AcquireClient({ agent }: Props) {
         </div>
       </section>
 
-      <div className="notes">
-        <h3>design notes · acquire / ipo</h3>
-        <ul>
-          <li><b>fundraise tape as the hero.</b> A 38px striped progress bar with hairline ticks every 5% reads as a real-time fundraise tape, not a marketing progress bar. The ASCII <code>[████░░]</code> caption sits inline on the bar via mix-blend-mode for that quant-desk feel.</li>
-          <li><b>cost preview is live math.</b> Type a share count and every line updates: subtotal, 0.5% protocol fee, network estimate, total. The total row is the only place accent fills the whole row — the action moment.</li>
-          <li><b>blotter, not &quot;transactions.&quot;</b> Monospace timestamps, status glyph in its own column (▸ ok · · pending × failed), tx hash as a copy-pill on the right. Real <code>Bought</code> events stream in via wagmi event watch.</li>
-          <li><b>mobile bottom-bar.</b> The cost total + mint button stick to the bottom of the viewport; the most expensive operation (mint) is always one tap away.</li>
-          <li><b>post-ipo apy estimate</b> sits in the stats strip — judges are buying a productive asset, so frame it like a fixed-income product: par value + yield + remaining supply.</li>
-        </ul>
-      </div>
     </>
   );
 }

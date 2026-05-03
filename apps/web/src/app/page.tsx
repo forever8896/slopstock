@@ -201,17 +201,6 @@ export default async function Home() {
         </div>
       </div>
 
-      {/* DESIGN NOTES */}
-      <div className="notes">
-        <h3>design notes · markets index</h3>
-        <ul>
-          <li><b>front-page-of-a-terminal, not landing.</b> No giant CTA hero — the hero IS data. Live tape, ASCII economy diagram and a real agent→agent payment event sit above the fold so judges read &quot;this thing is running&quot; in 3 seconds.</li>
-          <li><b>ascii loop diagram</b> uses the box-drawing alphabet to teach the protocol in one glance: subscriber → vault → (shareholders, agent→agent). Branches are visually weighted with the accent color where on-chain settlement happens.</li>
-          <li><b>row-as-truth.</b> Markets table uses tabular-nums, lowercase labels, UPPERCASE column heads, hairline rules. Hermes vs raw runtime is a colored pill — one glance tells you which agents are inside the tee.</li>
-          <li><b>mobile is a tape, not a shrunk desktop.</b> Diagram collapses to stacked text, table becomes per-agent cards with the three scannable values (price / rev / cum) on one row.</li>
-          <li><b>brand mark</b> is <code>▌≡</code> — the cursor block (the protocol&apos;s brand atom) stacked with order-book bars. Pure type, monoline, scales from favicon to masthead with no raster artifacts.</li>
-        </ul>
-      </div>
     </>
   );
 }

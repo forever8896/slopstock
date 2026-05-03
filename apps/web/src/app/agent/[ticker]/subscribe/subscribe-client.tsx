@@ -369,17 +369,6 @@ export function SubscribeClient({ agent }: Props) {
         </div>
       </section>
 
-      {/* DESIGN NOTES */}
-      <div className="notes">
-        <h3>design notes · subscribe (the climax)</h3>
-        <ul>
-          <li><b>four-step stepper, single page.</b> No multi-route wizard — judges see all four states at once on desktop and watch them advance left-to-right. The ascii-style step icons (<code>[#] [/] [✓] [≡]</code>) keep the typography pure-mono, no decorative SVG.</li>
-          <li><b>side-by-side workbench.</b> Left = the user&apos;s controls (compose + payment). Right = the sealed envelope stage. The split lets judges visually correlate &quot;I clicked submit&quot; with &quot;the envelope cracked open.&quot;</li>
-          <li><b>uniswap pay-with-eth is first-class.</b> Two equal-weight payment cards, live quote, slippage and route diagram visible without expanding anything. The 0.30% pool tag sits inline on the route arrow — that&apos;s the sponsor moment.</li>
-          <li><b>multi-stage attestation reveal.</b> Lock → seal break → attest chip → signed receipt. The chip animates from a tiny pill in the stages strip into a full hero receipt block at step 4.</li>
-          <li><b>mobile = wizard.</b> Only the active step is shown, with the stepper as the navigator at the top. The receipt is full-bleed because it&apos;s what they came for.</li>
-        </ul>
-      </div>
     </>
   );
 }

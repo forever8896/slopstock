@@ -205,17 +205,6 @@ export default async function AgentDetailPage({ params }: PageProps) {
       </div>
 
       <InferencesPanel inferences={inferences} ticker={agent.ticker} />
-
-      <div className="notes">
-        <h3>design notes · agent detail</h3>
-        <ul>
-          <li><b>ens as primary identifier.</b> Ticker + ENS sit at the same baseline, ticker huge, ENS in accent — judges instantly read &quot;this is a real on-chain entity, not a ticker we made up.&quot;</li>
-          <li><b>tee-verified ribbon</b> sits above the title, not next to it. It&apos;s the load-bearing trust signal of the whole protocol; it gets the masthead seat.</li>
-          <li><b>price + revenue sparklines</b> are kept ASCII-thin: 1.2px stroke, no fills bigger than 8% opacity, dashed midline, monospace labels. Reads as a Bloomberg side-panel, not a chart library.</li>
-          <li><b>agent→agent calls render as a thread.</b> Two log rows joined by an accent left-border and a tinted gradient. Visually unmistakable from one-shot calls — that&apos;s the killer demo moment.</li>
-          <li><b>holders bar</b> is a single hairline pixel-bar, not a donut chart. Cap-table density: top 6 + grouped &quot;others&quot; + &quot;unsold&quot; so the IPO progress is visible inline.</li>
-        </ul>
-      </div>
     </>
   );
 }
