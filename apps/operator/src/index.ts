@@ -1,22 +1,25 @@
 /**
  * @stratum/operator — agent operator node entrypoint.
- *
- * What runs in this process:
- *   1. The MCP server (stratum.agent.{profile,quote,infer,attestation}).
- *   2. The HTTP gateway: x402 payment + chain-driven /profile + /receipts.
- *   3. (Outside this process) the AXL daemon — forwards mesh requests to
- *      localhost:HTTP_PORT and localhost:MCP_PORT.
- *
- * The compute backend is OpenAI-compatible HTTP (Ollama by default; override
- * via COMPUTE_BASE_URL/COMPUTE_API_KEY/COMPUTE_MODEL).
  */
+
+// Earliest possible boot marker — if this doesn't appear in Railway logs,
+// the process never even started executing this file (path issue, missing
+// dep, etc).
+process.stderr.write(`[boot] ${new Date().toISOString()} index.ts loaded · cwd=${process.cwd()} · bun=${process.versions["bun"] ?? "?"} · port=${process.env["PORT"] ?? "?"}\n`);
+
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`[boot] uncaughtException: ${err instanceof Error ? err.stack : String(err)}\n`);
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(`[boot] unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}\n`);
+});
 
 // 0G testnet TEE provider endpoints serve over HTTPS with non-public CA
 // chains. Relax TLS verification BEFORE any module that does network
-// initialization is imported — must be set as early as possible in the
-// process, before fetch's TLS context is locked in.
+// initialization is imported.
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
+process.stderr.write(`[boot] importing modules…\n`);
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildAgentInfoCache, buildClients } from "./chain/clients.ts";
 import { buildReceiptSigner } from "./compute/receipt.ts";
@@ -25,10 +28,14 @@ import { startHttpServer } from "./http/server.ts";
 import { buildMcpServer } from "./mcp/server.ts";
 import { buildRuntimeRouter } from "./runtime/index.ts";
 import { initRegistry, listDynamicAgents } from "./store/dynamic-registry.ts";
+process.stderr.write(`[boot] modules imported.\n`);
 
 async function main() {
+  process.stderr.write(`[boot] main() entered\n`);
   const config = loadConfig();
+  process.stderr.write(`[boot] config loaded · port=${config.HTTP_PORT}\n`);
   const clients = buildClients(config);
+  process.stderr.write(`[boot] clients built\n`);
 
   console.log("[stratum/operator] starting", {
     operator: clients.account.address,
@@ -75,6 +82,7 @@ async function main() {
   const stdioTransport = new StdioServerTransport();
 
   // 2. HTTP gateway.
+  process.stderr.write(`[boot] starting http on :${config.HTTP_PORT}…\n`);
   const httpServer = startHttpServer({
     config,
     clients,
@@ -87,6 +95,7 @@ async function main() {
   });
 
   console.log(`[stratum/operator] http listening on :${config.HTTP_PORT}`);
+  process.stderr.write(`[boot] http listening · ready for /healthz\n`);
   console.log(`[stratum/operator] mcp ready on stdio (HTTP transport for AXL pending)`);
 
   const shutdown = async (signal: string) => {

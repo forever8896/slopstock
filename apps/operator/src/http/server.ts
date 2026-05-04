@@ -36,6 +36,16 @@ import type { RuntimeRouter } from "../runtime/index.ts";
 import { RuntimeError } from "../runtime/index.ts";
 import { listReceipts, recordReceipt } from "../store/receipts.ts";
 import { priceForToken } from "../runtime/pricing.ts";
+import {
+  getOperatorOgStorage,
+  OgStorageNotFoundError,
+} from "../storage/og-storage-impl.ts";
+import {
+  TEMPLATE_LIST,
+  computeManifestHash,
+  validateManifest,
+  type AgentManifest,
+} from "@stratum/shared";
 import { build402Response, parsePaymentHeader, type PaymentChallenge, validateReceipt } from "./x402.ts";
 
 export interface HttpDeps {
@@ -100,7 +110,7 @@ export function startHttpServer(deps: HttpDeps) {
       }
 
       if (url.pathname === "/agents/register" && req.method === "POST") {
-        return withCors(await handleRegisterAgent(req));
+        return withCors(await handleRegisterAgent(req, deps));
       }
 
       if (url.pathname === "/agents" && req.method === "GET") {
@@ -109,6 +119,19 @@ export function startHttpServer(deps: HttpDeps) {
 
       if (url.pathname === "/agents/test" && req.method === "POST") {
         return withCors(await handleTestAgent(req, deps));
+      }
+
+      if (url.pathname === "/templates" && req.method === "GET") {
+        return withCors(json({ templates: TEMPLATE_LIST }));
+      }
+
+      if (url.pathname === "/og-storage/pin" && req.method === "POST") {
+        return withCors(await handleOgStoragePin(req, deps));
+      }
+
+      const ogFetchMatch = url.pathname.match(/^\/og-storage\/([0-9a-fA-Fx]+)$/);
+      if (ogFetchMatch && req.method === "GET") {
+        return withCors(await handleOgStorageFetch(ogFetchMatch[1]!, deps));
       }
 
       const financeMatch = url.pathname.match(/^\/agents\/(\d+)\/deploy-finance$/);
@@ -121,10 +144,14 @@ export function startHttpServer(deps: HttpDeps) {
   });
 }
 
-async function handleRegisterAgent(req: Request): Promise<Response> {
-  let body: Partial<DynamicAgent>;
+async function handleRegisterAgent(req: Request, deps: HttpDeps): Promise<Response> {
+  type RegisterBody = Partial<DynamicAgent> & {
+    bundleManifestCid?: string;
+    manifest?: AgentManifest;
+  };
+  let body: RegisterBody;
   try {
-    body = (await req.json()) as Partial<DynamicAgent>;
+    body = (await req.json()) as RegisterBody;
   } catch {
     return json({ error: "invalid json body" }, { status: 400 });
   }
@@ -143,12 +170,45 @@ async function handleRegisterAgent(req: Request): Promise<Response> {
     if (!body[k]) return json({ error: `missing field: ${k}` }, { status: 400 });
   }
 
+  // Manifest mode (new): caller pinned a manifest before mint and committed
+  // its hash on chain. Verify the binding before accepting registration.
+  let templateId: string | undefined;
+  let runtimeTier: "openai-compat" | "tools-lite" | "hermes" | undefined;
+  let bundleManifestCid: string | undefined;
+  if (body.manifest) {
+    const validationErr = validateManifest(body.manifest);
+    if (validationErr) {
+      return json({ error: `invalid manifest: ${validationErr}` }, { status: 400 });
+    }
+    const expected = computeManifestHash(body.manifest);
+    if (body.bundleManifestCid) {
+      const got = body.bundleManifestCid.replace(/^0x/, "").toLowerCase();
+      const exp = expected.replace(/^0x/, "").toLowerCase();
+      if (got !== exp) {
+        return json(
+          {
+            error: "bundleManifestCid does not match keccak(manifest)",
+            expected: exp,
+            got,
+          },
+          { status: 400 },
+        );
+      }
+    }
+    bundleManifestCid = expected;
+    templateId = body.manifest.brain.templateId;
+    runtimeTier = body.manifest.brain.runtimeTier;
+
+    // Pin to operator shadow so the runtime can fetch by CID later. Idempotent.
+    const ogs = getOperatorOgStorage({ dataDir: deps.config.AGENTS_DATA_DIR });
+    await ogs.pinJson(body.manifest);
+  }
+
   const perCallSmallest = body.perCallSmallest!;
   const perCallHuman =
     body.perCallHuman ??
     `$${(Number(perCallSmallest) / 1e6).toFixed(2)}`;
 
-  // First-class shape, populated regardless of what the client sent.
   const record: DynamicAgent = {
     tokenId: String(body.tokenId),
     ticker: String(body.ticker).toUpperCase(),
@@ -157,14 +217,75 @@ async function handleRegisterAgent(req: Request): Promise<Response> {
     model: String(body.model),
     perCallSmallest,
     perCallHuman,
-    runtime: body.runtime === "hermes" ? "hermes" : "openai-compat",
+    runtime: runtimeTier === "hermes"
+      ? "hermes"
+      : body.runtime === "hermes"
+        ? "hermes"
+        : "openai-compat",
+    backend: body.backend === "0g-compute" ? "0g-compute" : "openai-compat",
     creator: String(body.creator),
     txHash: String(body.txHash),
     createdAt: Math.floor(Date.now() / 1000),
+    ...(bundleManifestCid ? { bundleManifestCid } : {}),
+    ...(templateId ? { templateId } : {}),
+    ...(runtimeTier ? { runtimeTier } : {}),
+    ...(body.manifest ? { manifestShadow: body.manifest } : {}),
   };
 
   await registerDynamicAgent(record);
   return json({ ok: true, agent: record });
+}
+
+async function handleOgStoragePin(req: Request, deps: HttpDeps): Promise<Response> {
+  let body: { content?: string; contentType?: string; json?: unknown };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: "invalid json body" }, { status: 400 });
+  }
+  const ogs = getOperatorOgStorage({ dataDir: deps.config.AGENTS_DATA_DIR });
+  try {
+    if (body.json !== undefined) {
+      const result = await ogs.pinJson(body.json);
+      return json({ ok: true, ...result });
+    }
+    if (typeof body.content === "string") {
+      const result = await ogs.pinText(body.content, body.contentType ?? "text/plain");
+      return json({ ok: true, ...result });
+    }
+    return json({ error: "either `content` or `json` is required" }, { status: 400 });
+  } catch (err) {
+    return json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
+  }
+}
+
+async function handleOgStorageFetch(rootHashRaw: string, deps: HttpDeps): Promise<Response> {
+  const ogs = getOperatorOgStorage({ dataDir: deps.config.AGENTS_DATA_DIR });
+  try {
+    const text = await ogs.fetchText(rootHashRaw);
+    // Best-effort content-type sniff: JSON if it parses as such.
+    let contentType = "text/plain";
+    try {
+      JSON.parse(text);
+      contentType = "application/json";
+    } catch {
+      /* leave as text/plain */
+    }
+    return new Response(text, {
+      headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=300" },
+    });
+  } catch (err) {
+    if (err instanceof OgStorageNotFoundError) {
+      return json({ error: err.message }, { status: 404 });
+    }
+    return json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
+  }
 }
 
 async function handleListAgents(): Promise<Response> {

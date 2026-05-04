@@ -10,7 +10,16 @@ import {
   useWriteContract,
 } from "wagmi";
 import { decodeEventLog, keccak256, toBytes, stringToHex } from "viem";
-import { ZG_GALILEO } from "@stratum/shared";
+import {
+  ZG_GALILEO,
+  TEMPLATE_LIST,
+  computeManifestHash,
+  type AgentManifest,
+  type CapabilityTemplate,
+  type CapabilityTemplateId,
+  type RuntimeTier,
+} from "@stratum/shared";
+import { pinManifestToOgStorage } from "../../lib/og-storage";
 
 type Hex = `0x${string}`;
 
@@ -53,38 +62,22 @@ const MODELS: Array<{ id: string; label: string; goodFor: string }> = [
   { id: "grok-41-fast", label: "grok-4.1-fast", goodFor: "broad knowledge, fast" },
 ];
 
-const PRESET_PROMPTS: Array<{ key: string; label: string; prompt: string; model: string; description: string }> = [
+const RUNTIME_TIERS: Array<{ id: RuntimeTier; label: string; blurb: string; badge?: string }> = [
   {
-    key: "translator",
-    label: "translator",
-    prompt:
-      "You are a precise translation agent. The user gives you text in any language; respond with JSON {\"detected_lang\": \"...\", \"english\": \"...\", \"notes\": \"...\"}. Be literal, no editorializing. No prose outside the JSON.",
-    model: "qwen3-coder-480b-a35b-instruct-turbo",
-    description: "Translate any text to English with detected source language.",
+    id: "openai-compat",
+    label: "openai-compat",
+    blurb: "single-shot. fastest, simplest, no tools. just system-prompt + model.",
   },
   {
-    key: "tldr",
-    label: "tl;dr",
-    prompt:
-      "You are a one-paragraph summarizer. The user gives you arbitrary text. Reply with JSON {\"summary\": \"<= 50 words\", \"key_points\": [\"...\"], \"sentiment\": \"positive|neutral|negative\"}. Nothing else.",
-    model: "google-gemma-4-31b-it",
-    description: "Summarize any text into a tight TL;DR with sentiment.",
+    id: "tools-lite",
+    label: "tools-lite",
+    blurb: "per-call agent loop with the template's tool whitelist. fresh memory each call.",
   },
   {
-    key: "rugcheck",
-    label: "rug-check",
-    prompt:
-      "You are a meme-token ruggability scout. Given a token name + URL or description, respond with JSON {\"score\": 0-10, \"red_flags\": [\"...\"], \"verdict\": \"safe|caution|rug\"}. 10 = obvious rug. Be skeptical and concise.",
-    model: "qwen3-coder-480b-a35b-instruct-turbo",
-    description: "Score a meme token's rug-ability 0-10 with reasoning.",
-  },
-  {
-    key: "headline",
-    label: "headline-writer",
-    prompt:
-      "You are a Bloomberg-terminal headline writer. Given a topic, produce JSON {\"primary\": \"<= 70 chars all-caps\", \"secondary\": \"<= 120 chars\", \"tickers\": [\"...\"]}. Sharp, factual, no fluff.",
-    model: "claude-opus-4-7",
-    description: "Crisp Bloomberg-style headlines for any topic.",
+    id: "hermes",
+    label: "hermes",
+    blurb: "full agent. persistent memory, multi-turn, the same runtime AUDIT uses.",
+    badge: "experimental",
   },
 ];
 
@@ -94,22 +87,34 @@ export function LaunchClient() {
   const { switchChain } = useSwitchChain();
   const onZg = chainId === ZG_CHAIN_ID;
 
-  const [ticker, setTicker] = useState("MYBOT");
-  const [description, setDescription] = useState(
-    "translates any text to english and detects the source language.",
-  );
-  const [systemPrompt, setSystemPrompt] = useState(PRESET_PROMPTS[0]!.prompt);
-  const [model, setModel] = useState(MODELS[0]!.id);
+  // Default to the headline cross-agent-orchestrator template; user can switch.
+  const initialTemplate = TEMPLATE_LIST[0] as CapabilityTemplate;
+  const [templateId, setTemplateId] = useState<CapabilityTemplateId>(initialTemplate.id);
+  const [ticker, setTicker] = useState("WHALE");
+  const [description, setDescription] = useState(initialTemplate.blurb);
+  const [systemPrompt, setSystemPrompt] = useState(initialTemplate.systemPrompt);
+  const [model, setModel] = useState(initialTemplate.defaultModel);
+  const [runtimeTier, setRuntimeTier] = useState<RuntimeTier>(initialTemplate.suggestedTier);
+  const [backend, setBackend] = useState<"openai-compat" | "0g-compute">("openai-compat");
+  const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
+  const ZG_TEE_PROVIDER = "0xa48f01287233509FD694a22Bf840225062E67836";
+  // Provider currently serves qwen2.5-7b-instruct via TeeML; this can change
+  // when the provider redeploys, so we stay descriptive.
+  const ZG_TEE_MODEL = "provider-served · TeeML-attested";
   const [perCall, setPerCall] = useState("0.10");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [mintedTokenId, setMintedTokenId] = useState<string | null>(null);
   const [registered, setRegistered] = useState(false);
-  const [testInput, setTestInput] = useState("Bonjour, comment ça va aujourd'hui ?");
+  const [testInput, setTestInput] = useState(initialTemplate.defaultTestInput);
   const [testRunning, setTestRunning] = useState(false);
   const [testOutput, setTestOutput] = useState<string | null>(null);
   const [financeDeploying, setFinanceDeploying] = useState(false);
   const [financeError, setFinanceError] = useState<string | null>(null);
+  const [pinning, setPinning] = useState(false);
+  const [pinResult, setPinResult] = useState<{ rootHash: string; uri: string; size: number } | null>(null);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinnedManifest, setPinnedManifest] = useState<AgentManifest | null>(null);
   const [finance, setFinance] = useState<{
     shareToken: string;
     revenueVault: string;
@@ -150,9 +155,12 @@ export function LaunchClient() {
     }
   }, [txConfirmed, receipt, address]);
 
-  // After mint, register with operator so the agent is queryable.
+  // After mint, register with operator so the agent is queryable. We pass
+  // the pinned manifest + bundleManifestCid so the operator can verify the
+  // on-chain hash binding before accepting the registration.
   useEffect(() => {
     if (!mintedTokenId || registered || !address || !txHash) return;
+    if (!pinnedManifest || !pinResult) return;
     (async () => {
       try {
         const res = await fetch(`${OPERATOR_URL}/agents/register`, {
@@ -162,12 +170,15 @@ export function LaunchClient() {
             tokenId: mintedTokenId,
             ticker: ticker.toUpperCase(),
             description,
-            systemPrompt,
-            model,
-            perCallSmallest: String(Math.round(Number(perCall) * 1e6)),
+            systemPrompt: pinnedManifest.brain.systemPrompt,
+            model: pinnedManifest.brain.model,
+            perCallSmallest: pinnedManifest.pricing.perCallSmallest,
             creator: address,
             txHash,
-            runtime: "openai-compat",
+            runtime: runtimeTier === "hermes" ? "hermes" : "openai-compat",
+            backend,
+            bundleManifestCid: pinResult.rootHash,
+            manifest: pinnedManifest,
           }),
         });
         if (!res.ok) throw new Error(`operator ${res.status}: ${await res.text()}`);
@@ -176,25 +187,51 @@ export function LaunchClient() {
         setRegisterError(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [mintedTokenId, registered, address, txHash, ticker, description, systemPrompt, model, perCall]);
+  }, [mintedTokenId, registered, address, txHash, ticker, description, runtimeTier, backend, pinnedManifest, pinResult]);
 
-  const metadataPayload = useMemo(
-    () => ({
-      ticker: ticker.toUpperCase(),
-      description,
-      systemPromptHash: typeof window === "undefined" ? "" : keccak256(toBytes(systemPrompt)),
-      model,
-      runtime: "openai-compat",
-      perCallUsdc: perCall,
-      version: "stratum/agent-metadata/v1",
-    }),
-    [ticker, description, systemPrompt, model, perCall],
-  );
-  const metadataJson = JSON.stringify(metadataPayload, null, 2);
-  const metadataHash = useMemo(() => keccak256(toBytes(metadataJson)), [metadataJson]);
-  const metadataURI = useMemo(
-    () => `data:application/json;base64,${typeof window === "undefined" ? "" : btoa(metadataJson)}`,
-    [metadataJson],
+  /** Build the manifest from current form state. Pure — no I/O. */
+  function buildManifest(creator: Hex): AgentManifest {
+    return {
+      schemaVersion: "stratum/agent-manifest@1",
+      identity: {
+        ticker: ticker.toUpperCase(),
+        name: ticker.toUpperCase(),
+        description,
+        creator,
+      },
+      brain: {
+        templateId,
+        systemPrompt,
+        model: backend === "0g-compute" ? "0g-tee-provider-served" : model,
+        backend,
+        runtimeTier,
+      },
+      capabilities: {
+        tools: [...currentTemplate.tools],
+        patterns: (currentTemplate.patterns ?? []).map((p) => ({ name: p.name, body: p.body })),
+        skills: (currentTemplate.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
+      },
+      pricing: {
+        perCallSmallest: String(Math.round(Number(perCall) * 1e6)),
+        perCallHuman: `$${Number(perCall).toFixed(2)}`,
+      },
+      meta: {
+        createdAt: Math.floor(Date.now() / 1000),
+        operatorHint: OPERATOR_URL,
+      },
+    };
+  }
+
+  // Live preview of the manifest hash so the right-hand panel can show what
+  // will go on chain. Changes whenever any form field changes.
+  const previewManifest = useMemo<AgentManifest | null>(() => {
+    if (!address) return null;
+    return buildManifest(address as Hex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, ticker, description, systemPrompt, model, backend, runtimeTier, perCall, templateId]);
+  const previewManifestHash = useMemo(
+    () => (previewManifest ? computeManifestHash(previewManifest) : null),
+    [previewManifest],
   );
 
   async function mint() {
@@ -204,12 +241,43 @@ export function LaunchClient() {
       return;
     }
     setErrorMsg(null);
+    setPinError(null);
+    setPinResult(null);
+    setPinnedManifest(null);
     setMintedTokenId(null);
     setRegistered(false);
     setRegisterError(null);
     setTestOutput(null);
 
+    // 1. Build + pin the manifest to 0G Storage. The pin must succeed before
+    //    we mint, because metadataHash on chain is the manifest's hash.
+    setPinning(true);
+    let manifest: AgentManifest;
+    let pin: { rootHash: string; uri: string; size: number };
     try {
+      manifest = buildManifest(address as Hex);
+      const pinResponse = await pinManifestToOgStorage(manifest);
+      pin = { rootHash: pinResponse.rootHash, uri: pinResponse.uri, size: pinResponse.size };
+      const localHash = computeManifestHash(manifest).replace(/^0x/, "").toLowerCase();
+      const remoteHash = pin.rootHash.replace(/^0x/, "").toLowerCase();
+      if (localHash !== remoteHash) {
+        throw new Error(
+          `manifest hash mismatch: local ${localHash.slice(0, 16)}… vs operator ${remoteHash.slice(0, 16)}…`,
+        );
+      }
+      setPinResult(pin);
+      setPinnedManifest(manifest);
+    } catch (e) {
+      setPinError(e instanceof Error ? e.message : String(e));
+      setPinning(false);
+      return;
+    }
+    setPinning(false);
+
+    // 2. Mint with metadataHash = keccak(canonical(manifest)).
+    try {
+      const metadataHash = `0x${pin.rootHash.replace(/^0x/, "")}` as Hex;
+      const metadataURI = pin.uri;
       const sealedKey = stringToHex(`sealed:${ticker}:${Date.now()}`);
       const teeAttestation = stringToHex(`tee-attestation:${ticker}:${Date.now()}`);
 
@@ -223,6 +291,20 @@ export function LaunchClient() {
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  const currentTemplate = useMemo<CapabilityTemplate>(
+    () => TEMPLATE_LIST.find((t) => t.id === templateId) ?? initialTemplate,
+    [templateId, initialTemplate],
+  );
+
+  function applyTemplate(t: CapabilityTemplate) {
+    setTemplateId(t.id);
+    setDescription(t.blurb);
+    setSystemPrompt(t.systemPrompt);
+    setModel(t.defaultModel);
+    setRuntimeTier(t.suggestedTier);
+    setTestInput(t.defaultTestInput);
   }
 
   async function deployFinance() {
@@ -297,49 +379,54 @@ export function LaunchClient() {
             <em>agent.</em>
           </h1>
           <p className="hero-sub">
-            anyone can list. write a system prompt — that&apos;s the agent&apos;s brain. pick a venice
-            model. mint an erc-7857 inft. the operator picks it up immediately and serves your
-            prompt under the x402 paywall. revenue from each call accrues to whoever holds shares.
+            anyone can list. pick a capability template, name it, mint an erc-7857 iNFT.
+            the manifest pins to 0g storage; its hash binds on chain. the operator picks
+            it up immediately and serves it with real tools, real agent-to-agent calls,
+            real revenue to your shareholders.
           </p>
           <div className="hero-meta">
             <span className="pill ok">▌ permissionless mint</span>
             <span className="pill">erc-7857</span>
-            <span className="pill">venice models</span>
+            <span className="pill">0g storage</span>
+            <span className="pill">tools-lite runtime</span>
             <span className="pill">live in &lt;30s</span>
           </div>
 
           <div className="agent-event" style={{ marginTop: 14 }}>
             <span className="glyph">↳</span>
             <span>
-              <b>your system prompt</b> is the agent&apos;s identity. <span className="muted">model + prompt are stored on operator (registered after mint), hash pinned in the iNFT metadata on chain.</span>
+              <b>capability templates</b> wire real tools (query_agent, fetch_url, image_gen,
+              parse_ast, …). <span className="muted">your tokenId&apos;s metadataHash is keccak(manifest);
+              tampering with any tool, prompt, or pattern breaks the chain commit.</span>
             </span>
           </div>
         </div>
 
         <div className="hero-r">
           <div className="loop-head">
-            <span>presets · or write your own</span>
-            <span>{PRESET_PROMPTS.length} starters</span>
+            <span>capability templates · pick one</span>
+            <span>{TEMPLATE_LIST.length} live</span>
           </div>
           <div style={{ display: "grid", gap: 8 }}>
-            {PRESET_PROMPTS.map((p) => (
+            {TEMPLATE_LIST.map((t) => (
               <button
-                key={p.key}
+                key={t.id}
                 type="button"
-                className="pay-card"
+                className={`pay-card ${templateId === t.id ? "on" : ""}`}
                 style={{ textAlign: "left" }}
-                onClick={() => {
-                  setTicker(p.label.toUpperCase().replace(/[^A-Z0-9]/g, ""));
-                  setDescription(p.description);
-                  setSystemPrompt(p.prompt);
-                  setModel(p.model);
-                }}
+                onClick={() => applyTemplate(t)}
               >
                 <div className="h">
-                  <span className="t">{p.label}</span>
-                  <span className="badge">load</span>
+                  <span className="t">{t.label}</span>
+                  <span className="badge">{templateId === t.id ? "selected" : t.sponsorTag}</span>
                 </div>
-                <div className="body">{p.description}</div>
+                <div className="body">{t.blurb}</div>
+                <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {t.tools.map((tool) => (
+                    <span key={tool} className="pill" style={{ fontSize: 9 }}>{tool}</span>
+                  ))}
+                  <span className="pill ok" style={{ fontSize: 9 }}>tier · {t.suggestedTier}</span>
+                </div>
               </button>
             ))}
           </div>
@@ -367,52 +454,173 @@ export function LaunchClient() {
 
           <div className="work-section">
             <h3>
-              02 · system prompt{" "}
+              02 · capability template{" "}
               <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
-                THE BRAIN
+                {currentTemplate.label.toUpperCase()}
               </span>
             </h3>
-            <div className="muted" style={{ marginBottom: 6, fontSize: 11 }}>
-              this is the agent. every paid call prepends this to the user&apos;s input. ask for JSON
-              output if you want structured responses (the runtime defaults to JSON mode).
+            <div className="muted" style={{ marginBottom: 8, fontSize: 11 }}>
+              picked: <b className="acc">{currentTemplate.label}</b> · {currentTemplate.blurb}
             </div>
-            <textarea
-              className="req"
-              style={{ minHeight: 220 }}
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="You are a precise translation agent..."
-              spellCheck={false}
-            />
-            <div style={{ marginTop: 6, fontSize: 11, color: "var(--mute)" }}>
-              {systemPrompt.length} chars · keccak{" "}
-              <span className="acc">
-                {systemPrompt ? shortish(keccak256(toBytes(systemPrompt))) : "—"}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+              {currentTemplate.tools.map((tool) => (
+                <span key={tool} className="pill" style={{ fontSize: 10 }}>{tool}</span>
+              ))}
+              <span className="pill ok" style={{ fontSize: 10 }}>
+                tier · {currentTemplate.suggestedTier}
+              </span>
+              <span className="pill" style={{ fontSize: 10 }}>
+                sponsor · {currentTemplate.sponsorTag}
               </span>
             </div>
+            <button
+              type="button"
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => setShowSystemPromptEditor((v) => !v)}
+            >
+              {showSystemPromptEditor ? "hide system prompt" : "edit system prompt →"}
+            </button>
+            {showSystemPromptEditor ? (
+              <>
+                <textarea
+                  className="req"
+                  style={{ minHeight: 200, marginTop: 8 }}
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  spellCheck={false}
+                />
+                <div style={{ marginTop: 6, fontSize: 11, color: "var(--mute)" }}>
+                  {systemPrompt.length} chars · keccak{" "}
+                  <span className="acc">
+                    {systemPrompt ? shortish(keccak256(toBytes(systemPrompt))) : "—"}
+                  </span>
+                </div>
+              </>
+            ) : null}
           </div>
 
           <div className="work-section">
-            <h3>03 · model</h3>
-            <div style={{ display: "grid", gap: 6 }}>
-              {MODELS.map((m) => (
+            <h3>
+              03 · compute backend{" "}
+              {backend === "0g-compute" ? (
+                <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
+                  TEE-ATTESTED
+                </span>
+              ) : (
+                <span className="muted" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
+                  HOSTED LLM
+                </span>
+              )}
+            </h3>
+            <div className="pay-grid" style={{ marginBottom: 12 }}>
+              <button
+                type="button"
+                className={`pay-card ${backend === "openai-compat" ? "on" : ""}`}
+                onClick={() => setBackend("openai-compat")}
+              >
+                <div className="h">
+                  <span className="t">venice</span>
+                  <span className="badge">model breadth</span>
+                </div>
+                <div className="body">
+                  pick from qwen3-coder-480b, claude-opus-4-7, grok, gemma-4. fast, hosted, no tee
+                  attestation.
+                </div>
+              </button>
+              <button
+                type="button"
+                className={`pay-card ${backend === "0g-compute" ? "on" : ""}`}
+                onClick={() => setBackend("0g-compute")}
+              >
+                <div className="h">
+                  <span className="t">0g compute</span>
+                  <span className="badge">teeml-attested</span>
+                </div>
+                <div className="body">
+                  inference runs inside intel tdx; broker verifies signature. each receipt carries{" "}
+                  <span className="acc">isValid</span>. provider determines model.
+                </div>
+              </button>
+            </div>
+
+            {backend === "openai-compat" ? (
+              <>
+                <div className="up" style={{ marginBottom: 6 }}>venice model</div>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {MODELS.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`pay-card ${model === m.id ? "on" : ""}`}
+                      style={{ textAlign: "left" }}
+                      onClick={() => setModel(m.id)}
+                    >
+                      <div className="h">
+                        <span className="t">{m.label}</span>
+                        <span className="badge">{model === m.id ? "selected" : "click"}</span>
+                      </div>
+                      <div className="body">{m.goodFor}</div>
+                    </button>
+                  ))}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 11, color: "var(--mute)" }}>
+                  served via venice → operator routes inferences here
+                </div>
+              </>
+            ) : (
+              <div className="kv" style={{ border: "1px solid rgba(16,185,129,0.35)", background: "rgba(16,185,129,0.04)" }}>
+                <div className="k">enclave</div>
+                <div className="v acc">intel tdx · teeml signed</div>
+                <div className="k">provider</div>
+                <div className="v">{shortish(ZG_TEE_PROVIDER, 6)}</div>
+                <div className="k">model</div>
+                <div className="v">
+                  {ZG_TEE_MODEL}{" "}
+                  <span className="muted">— determined by provider attestation</span>
+                </div>
+                <div className="k">verifier</div>
+                <div className="v">
+                  <code>broker.inference.processResponse</code>
+                </div>
+                <div className="k">trade-off</div>
+                <div className="v muted">
+                  smaller model, slower first call (~10s broker init), every receipt has{" "}
+                  <span className="acc">isValid</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="work-section">
+            <h3>
+              04 · runtime tier{" "}
+              <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
+                {runtimeTier.toUpperCase()}
+              </span>
+            </h3>
+            <div className="pay-grid" style={{ marginBottom: 8 }}>
+              {RUNTIME_TIERS.map((t) => (
                 <button
-                  key={m.id}
+                  key={t.id}
                   type="button"
-                  className={`pay-card ${model === m.id ? "on" : ""}`}
-                  style={{ textAlign: "left" }}
-                  onClick={() => setModel(m.id)}
+                  className={`pay-card ${runtimeTier === t.id ? "on" : ""}`}
+                  onClick={() => setRuntimeTier(t.id)}
                 >
                   <div className="h">
-                    <span className="t">{m.label}</span>
-                    <span className="badge">{model === m.id ? "selected" : "click"}</span>
+                    <span className="t">{t.label}</span>
+                    <span className="badge">{t.badge ?? (runtimeTier === t.id ? "selected" : "click")}</span>
                   </div>
-                  <div className="body">{m.goodFor}</div>
+                  <div className="body">{t.blurb}</div>
                 </button>
               ))}
             </div>
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--mute)" }}>
-              served via venice → operator routes inferences here
+            <div style={{ fontSize: 11, color: "var(--mute)" }}>
+              {runtimeTier === "openai-compat"
+                ? "single-shot. no tools. simplest, fastest. just system prompt + model."
+                : runtimeTier === "tools-lite"
+                  ? "operator runs an agent loop with this template's tool whitelist. fresh memory each call. recommended."
+                  : "full hermes — persistent memory across calls. experimental for permissionless mints (the runtime materializes your manifest's patterns/skills as a real bundle)."}
             </div>
           </div>
 
@@ -422,11 +630,15 @@ export function LaunchClient() {
                 ? "connect wallet to mint"
                 : !onZg
                   ? `wallet on chain ${chainId} · switch to 0g galileo (${ZG_CHAIN_ID})`
-                  : txPending
-                    ? `mining tx ${txHash ? shortish(txHash) : ""}`
-                    : mintedTokenId
-                      ? `minted #${mintedTokenId}${registered ? " · registered" : registerError ? " · register failed" : " · registering…"}`
-                      : "mint inft on 0g galileo · register with operator · ready in <30s"}
+                  : pinning
+                    ? "pinning manifest to 0g storage…"
+                    : pinError
+                      ? `pin failed: ${pinError.slice(0, 80)}`
+                      : txPending
+                        ? `mining tx ${txHash ? shortish(txHash) : ""}`
+                        : mintedTokenId
+                          ? `minted #${mintedTokenId}${registered ? " · registered" : registerError ? " · register failed" : " · registering…"}`
+                          : "pin manifest → mint iNFT on 0g galileo → register with operator · <30s"}
             </span>
             <div style={{ display: "flex", gap: 10 }}>
               {!isConnected ? (
@@ -439,9 +651,15 @@ export function LaunchClient() {
                 <button
                   className="btn primary"
                   onClick={mint}
-                  disabled={txPending || Boolean(mintedTokenId)}
+                  disabled={pinning || txPending || Boolean(mintedTokenId)}
                 >
-                  {txPending ? "minting…" : mintedTokenId ? "minted ✓" : "mint & register →"}
+                  {pinning
+                    ? "pinning…"
+                    : txPending
+                      ? "minting…"
+                      : mintedTokenId
+                        ? "minted ✓"
+                        : "pin · mint · register →"}
                 </button>
               )}
             </div>
@@ -456,29 +674,50 @@ export function LaunchClient() {
               register failed: {registerError} — iNFT was minted, you can manually register later.
             </div>
           ) : null}
+          {pinError ? (
+            <div style={{ padding: "10px 20px", color: "var(--red)", fontSize: 12, borderTop: "1px solid var(--hair-2)" }}>
+              0g storage pin failed: {pinError}
+            </div>
+          ) : null}
         </div>
 
         <div className="work-r">
           <div className="seal-stage">
-            <h3>tee · what gets minted + registered</h3>
+            <h3>what gets minted · the iNFT story end-to-end</h3>
             <div className="seal-anim" style={{ minHeight: 0 }}>
               <pre style={{ margin: 0, fontFamily: "inherit", fontSize: 12, lineHeight: 1.45, color: "var(--fg-2)" }}>
-{`  ┌─────────────────────────────────────┐
-  │ erc-7857 inft · 0g galileo          │
-  │   metadataHash · keccak(meta json)  │
-  │   sealedKey    · placeholder        │
-  │   teeAttest    · placeholder        │
+{`  ┌─ on 0g storage ─────────────────────┐
+  │ manifest.json · ${truncFit(currentTemplate.id, 20)}│
+  │   tools     · ${truncFit(currentTemplate.tools.join(","), 22)}│
+  │   patterns  · ${(currentTemplate.patterns?.length ?? 0).toString().padEnd(22)}│
+  │   skills    · ${(currentTemplate.skills?.length ?? 0).toString().padEnd(22)}│
+  │   rootHash  · ${truncFit(pinResult ? pinResult.rootHash : (previewManifestHash ?? "(preview after wallet connect)").replace(/^0x/, ""), 22)}│
   │                                     │
-  │ operator registry · post-mint       │
-  │   tokenId      · ${mintedTokenId ? `#${mintedTokenId}`.padEnd(20) : "(after mint)         "}│
-  │   systemPrompt · ${(systemPrompt.length + " chars").padEnd(20)}│
-  │   model        · ${truncFit(model, 20)}│
-  │   perCall      · $${perCall.padEnd(19)}│
+  ├─ on chain · 0g galileo ─────────────┤
+  │ erc-7857 inft                       │
+  │   metadataHash · keccak(manifest)   │
+  │   metadataURI  · 0g-storage://…     │
   │                                     │
-  │ available at /x402/infer immediately│
+  ├─ operator registry · post-mint ─────┤
+  │   tokenId   · ${mintedTokenId ? `#${mintedTokenId}`.padEnd(22) : "(after mint)           "}│
+  │   tier      · ${truncFit(runtimeTier, 22)}│
+  │   backend   · ${truncFit(backend, 22)}│
+  │   perCall   · $${perCall.padEnd(21)}│
+  │                                     │
+  │ live at /x402/infer immediately     │
   └─────────────────────────────────────┘`}
               </pre>
             </div>
+            {pinResult ? (
+              <div className="kv" style={{ marginTop: 10, border: "1px solid rgba(16,185,129,0.35)", background: "rgba(16,185,129,0.04)" }}>
+                <div className="k">manifest pinned</div>
+                <div className="v acc">{shortish(pinResult.rootHash)}</div>
+                <div className="k">size</div>
+                <div className="v">{pinResult.size.toLocaleString()} bytes</div>
+                <div className="k">uri</div>
+                <div className="v">{pinResult.uri}</div>
+              </div>
+            ) : null}
           </div>
 
           {mintedTokenId && registered ? (

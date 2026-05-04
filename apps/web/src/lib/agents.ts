@@ -52,6 +52,16 @@ export interface AgentDetail extends AgentSummary {
     agentRegistry: Hex;
   };
   bestBid: { bidder: Hex; price: bigint; expiresAt: number } | null;
+  /** Real-Agent Launch surface — only populated for permissionless mints. */
+  realAgent?: {
+    templateId: string;
+    runtimeTier: "openai-compat" | "tools-lite" | "hermes";
+    backend: "openai-compat" | "0g-compute";
+    bundleManifestCid: string;        // 0x-prefixed
+    tools: string[];
+    patternCount: number;
+    skillCount: number;
+  };
 }
 
 export interface Holder {
@@ -77,6 +87,147 @@ const SECONDS_PER_DAY = 86_400;
 
 export interface DynamicAgentSummary extends AgentSummary {
   permissionless: true;
+}
+
+/**
+ * Internal: shape used by every loader so static and dynamic agents share
+ * the same code paths.
+ */
+interface ResolvedAgent {
+  ticker: string;
+  ens: string;
+  tokenId: bigint;
+  shareToken: Hex;
+  revenueVault: Hex;
+  ipoSale: Hex;
+  baseDeployBlock: bigint;
+  runtime: "hermes" | "openai-compat";
+  isDynamic: boolean;
+  // Dynamic-only metadata (operator-supplied)
+  description?: string;
+  modelBase?: string;
+  perCallUsdc?: bigint;
+  perCallHuman?: string;
+  hasFinance: boolean;
+  // Real-Agent Launch metadata (only present for manifest-minted dynamic agents)
+  realAgent?: AgentDetail["realAgent"];
+}
+
+interface DynamicAgentRecord {
+  tokenId: string;
+  ticker: string;
+  description: string;
+  systemPrompt: string;
+  model: string;
+  perCallSmallest: string;
+  perCallHuman: string;
+  runtime: "hermes" | "openai-compat";
+  finance?: { shareToken: string; revenueVault: string; ipoSale: string };
+  // Real-Agent Launch fields (optional)
+  templateId?: string;
+  runtimeTier?: "openai-compat" | "tools-lite" | "hermes";
+  backend?: "openai-compat" | "0g-compute";
+  bundleManifestCid?: string;
+  manifestShadow?: {
+    capabilities?: { tools?: string[]; patterns?: unknown[]; skills?: unknown[] };
+  };
+}
+
+async function fetchDynamicByTicker(ticker: string): Promise<DynamicAgentRecord | null> {
+  const operatorUrl = process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
+  try {
+    const res = await fetch(`${operatorUrl}/agents`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { agents: DynamicAgentRecord[] };
+    return body.agents.find((a) => a.ticker.toUpperCase() === ticker.toUpperCase()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveAgentForReads(ticker: string): Promise<ResolvedAgent | null> {
+  const upper = ticker.toUpperCase();
+  const staticAgent = BASE_SEPOLIA_AGENTS[upper];
+  if (staticAgent) {
+    return {
+      ticker: upper,
+      ens: staticAgent.ensName,
+      tokenId: staticAgent.tokenId,
+      shareToken: staticAgent.shareToken,
+      revenueVault: staticAgent.revenueVault,
+      ipoSale: staticAgent.ipoSale,
+      baseDeployBlock: staticAgent.baseDeployBlock,
+      runtime: staticAgent.runtime,
+      isDynamic: false,
+      hasFinance: true,
+    };
+  }
+
+  const dyn = await fetchDynamicByTicker(upper);
+  if (!dyn) return null;
+  const realAgent = buildRealAgentMeta(dyn);
+  if (dyn.finance) {
+    // Walk back ~50k blocks from head — generous window for any agent
+    // launched in the last ~28h on Base Sepolia (~2s blocks).
+    const head = await basePublicClient.getBlockNumber();
+    const baseDeployBlock = head > 50_000n ? head - 50_000n : 0n;
+    return {
+      ticker: upper,
+      ens: `${upper.toLowerCase()}.permissionless`,
+      tokenId: BigInt(dyn.tokenId),
+      shareToken: dyn.finance.shareToken as Hex,
+      revenueVault: dyn.finance.revenueVault as Hex,
+      ipoSale: dyn.finance.ipoSale as Hex,
+      baseDeployBlock,
+      runtime: dyn.runtime,
+      isDynamic: true,
+      description: dyn.description,
+      modelBase: dyn.model,
+      perCallUsdc: BigInt(dyn.perCallSmallest),
+      perCallHuman: dyn.perCallHuman,
+      hasFinance: true,
+      ...(realAgent ? { realAgent } : {}),
+    };
+  }
+  // Dynamic agent that hasn't run deploy-finance yet — addresses unknown.
+  return {
+    ticker: upper,
+    ens: `${upper.toLowerCase()}.permissionless`,
+    tokenId: BigInt(dyn.tokenId),
+    shareToken: "0x0000000000000000000000000000000000000000" as Hex,
+    revenueVault: "0x0000000000000000000000000000000000000000" as Hex,
+    ipoSale: "0x0000000000000000000000000000000000000000" as Hex,
+    baseDeployBlock: 0n,
+    runtime: dyn.runtime,
+    isDynamic: true,
+    description: dyn.description,
+    modelBase: dyn.model,
+    perCallUsdc: BigInt(dyn.perCallSmallest),
+    perCallHuman: dyn.perCallHuman,
+    hasFinance: false,
+    ...(realAgent ? { realAgent } : {}),
+  };
+}
+
+function buildRealAgentMeta(dyn: DynamicAgentRecord): AgentDetail["realAgent"] | undefined {
+  if (!dyn.bundleManifestCid || !dyn.runtimeTier) return undefined;
+  const tools = dyn.manifestShadow?.capabilities?.tools ?? [];
+  const patternCount = dyn.manifestShadow?.capabilities?.patterns?.length ?? 0;
+  const skillCount = dyn.manifestShadow?.capabilities?.skills?.length ?? 0;
+  return {
+    templateId: dyn.templateId ?? "(custom)",
+    runtimeTier: dyn.runtimeTier,
+    backend: dyn.backend ?? "openai-compat",
+    bundleManifestCid: dyn.bundleManifestCid.startsWith("0x")
+      ? dyn.bundleManifestCid
+      : `0x${dyn.bundleManifestCid}`,
+    tools,
+    patternCount,
+    skillCount,
+  };
 }
 
 export async function listAgents(): Promise<Array<AgentSummary | DynamicAgentSummary>> {
@@ -156,9 +307,51 @@ export async function loadAgentSummary(ticker: string): Promise<AgentSummary> {
 }
 
 export async function loadAgentDetail(ticker: string): Promise<AgentDetail | null> {
-  const agent = BASE_SEPOLIA_AGENTS[ticker.toUpperCase()];
-  if (!agent) return null;
-  const meta = mustMeta(ticker);
+  const resolved = await resolveAgentForReads(ticker);
+  if (!resolved) return null;
+
+  // Static agents have rich off-chain metadata; dynamic agents carry their
+  // metadata on the resolved record (operator-supplied).
+  const staticMeta = AGENT_METADATA[resolved.ticker];
+
+  // Dynamic agents that haven't run deploy-finance: return a minimal stub
+  // so the page renders without 404. UI gracefully shows zeros for IPO/etc.
+  if (resolved.isDynamic && !resolved.hasFinance) {
+    return {
+      ticker: resolved.ticker,
+      ens: resolved.ens,
+      tokenId: resolved.tokenId,
+      perCallUsdc: resolved.perCallUsdc ?? 0n,
+      perCallHuman: resolved.perCallHuman ?? "$0.00",
+      pricePerShareUsdc: 0n,
+      cumulativeRevenueUsdc: 0n,
+      callsToday: 0,
+      runtime: resolved.runtime,
+      name: resolved.ticker.toLowerCase(),
+      description: resolved.description ?? "Permissionless agent — shares not yet deployed.",
+      modelBase: resolved.modelBase ?? "(unknown)",
+      expectedTeeMeasurement: ("0x" + "00".repeat(32)) as Hex,
+      ipo: {
+        pricePerShareUsdc: 0n,
+        sold: 0n,
+        allocation: 0n,
+        totalSupply: 0n,
+        startsAt: 0,
+        endsAt: 0,
+        isOpen: false,
+      },
+      contracts: {
+        iNFT: ZG_GALILEO.agentNft,
+        shareToken: resolved.shareToken,
+        vault: resolved.revenueVault,
+        ipoSale: resolved.ipoSale,
+        marketplace: ZG_GALILEO.marketplace,
+        agentRegistry: ZG_GALILEO.agentRegistry,
+      },
+      bestBid: null,
+      ...(resolved.realAgent ? { realAgent: resolved.realAgent } : {}),
+    };
+  }
 
   const [
     pricePerShare,
@@ -171,57 +364,81 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
     bestBidRaw,
   ] = await Promise.all([
     basePublicClient.readContract({
-      address: agent.ipoSale,
+      address: resolved.ipoSale,
       abi: ipoSaleAbi,
       functionName: "pricePerShare",
     }),
     basePublicClient.readContract({
-      address: agent.ipoSale,
+      address: resolved.ipoSale,
       abi: ipoSaleAbi,
       functionName: "sold",
     }),
     basePublicClient.readContract({
-      address: agent.ipoSale,
+      address: resolved.ipoSale,
       abi: ipoSaleAbi,
       functionName: "maxShares",
     }),
     basePublicClient.readContract({
-      address: agent.ipoSale,
+      address: resolved.ipoSale,
       abi: ipoSaleAbi,
       functionName: "startsAt",
     }),
     basePublicClient.readContract({
-      address: agent.ipoSale,
+      address: resolved.ipoSale,
       abi: ipoSaleAbi,
       functionName: "endsAt",
     }),
     basePublicClient.readContract({
-      address: agent.ipoSale,
+      address: resolved.ipoSale,
       abi: ipoSaleAbi,
       functionName: "isOpen",
     }),
     basePublicClient.readContract({
-      address: agent.shareToken,
+      address: resolved.shareToken,
       abi: shareTokenAbi,
       functionName: "totalSupply",
     }),
+    // Marketplace bids only exist for static agents — the marketplace is
+    // keyed by tokenId on 0G Galileo, and dynamic iNFTs DO have a real
+    // tokenId, so the read is safe; it'll just return empty for unbid agents.
     zgPublicClient.readContract({
       address: ZG_GALILEO.marketplace,
       abi: marketplaceAbi,
       functionName: "getBid",
-      args: [agent.tokenId],
-    }),
+      args: [resolved.tokenId],
+    }).catch(() => ({
+      bidder: "0x0000000000000000000000000000000000000000" as Hex,
+      price: 0n,
+      expiresAt: 0n,
+      bidderPubkey: "0x" as Hex,
+    })),
   ]);
 
-  const summary = await loadAgentSummary(ticker);
+  const snapshots = await loadSnapshots(resolved.ticker).catch(() => []);
+  const cumulativeRevenueUsdc = snapshots.reduce(
+    (acc, s) => acc + s.totalDistributedUsdc,
+    0n,
+  );
+  const callsToday = await callsInLastNSeconds(resolved.ticker, SECONDS_PER_DAY).catch(
+    () => 0,
+  );
 
   const zeroBid = bestBidRaw.bidder === "0x0000000000000000000000000000000000000000";
   return {
-    ...summary,
-    name: meta.name,
-    description: meta.description,
-    modelBase: meta.modelBase,
-    expectedTeeMeasurement: meta.expectedTeeMeasurement,
+    ticker: resolved.ticker,
+    ens: resolved.ens,
+    tokenId: resolved.tokenId,
+    perCallUsdc: staticMeta?.perCallUsdc ?? resolved.perCallUsdc ?? 0n,
+    perCallHuman: staticMeta?.perCallHuman ?? resolved.perCallHuman ?? "$0.00",
+    pricePerShareUsdc: pricePerShare,
+    cumulativeRevenueUsdc,
+    callsToday,
+    runtime: resolved.runtime,
+    name: staticMeta?.name ?? resolved.ticker.toLowerCase(),
+    description: staticMeta?.description ?? resolved.description ?? "",
+    modelBase: staticMeta?.modelBase ?? resolved.modelBase ?? "(unknown)",
+    expectedTeeMeasurement:
+      staticMeta?.expectedTeeMeasurement ?? (("0x" + "00".repeat(32)) as Hex),
     ipo: {
       pricePerShareUsdc: pricePerShare,
       sold,
@@ -233,9 +450,9 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
     },
     contracts: {
       iNFT: ZG_GALILEO.agentNft,
-      shareToken: agent.shareToken,
-      vault: agent.revenueVault,
-      ipoSale: agent.ipoSale,
+      shareToken: resolved.shareToken,
+      vault: resolved.revenueVault,
+      ipoSale: resolved.ipoSale,
       marketplace: ZG_GALILEO.marketplace,
       agentRegistry: ZG_GALILEO.agentRegistry,
     },
@@ -246,6 +463,7 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
           price: bestBidRaw.price,
           expiresAt: Number(bestBidRaw.expiresAt),
         },
+    ...(resolved.realAgent ? { realAgent: resolved.realAgent } : {}),
   };
 }
 
@@ -256,7 +474,9 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
  * single REST call.
  */
 export async function loadHolders(ticker: string): Promise<Holder[]> {
-  const agent = getAgent(ticker);
+  const resolved = await resolveAgentForReads(ticker);
+  if (!resolved || !resolved.hasFinance) return [];
+
   const transferEvent = shareTokenAbi.find(
     (e) => e.type === "event" && e.name === "Transfer",
   ) as never;
@@ -265,10 +485,10 @@ export async function loadHolders(ticker: string): Promise<Holder[]> {
   const head = await basePublicClient.getBlockNumber();
   const STEP = 45_000n; // safely under the 50k publicnode cap
 
-  for (let from = agent.baseDeployBlock; from <= head; from += STEP + 1n) {
+  for (let from = resolved.baseDeployBlock; from <= head; from += STEP + 1n) {
     const to = from + STEP > head ? head : from + STEP;
     const logs = await basePublicClient.getLogs({
-      address: agent.shareToken,
+      address: resolved.shareToken,
       event: transferEvent,
       fromBlock: from,
       toBlock: to,
@@ -292,10 +512,11 @@ export async function loadHolders(ticker: string): Promise<Holder[]> {
 }
 
 export async function loadSnapshots(ticker: string): Promise<Snapshot[]> {
-  const agent = getAgent(ticker);
+  const resolved = await resolveAgentForReads(ticker);
+  if (!resolved || !resolved.hasFinance) return [];
 
   const count = await basePublicClient.readContract({
-    address: agent.revenueVault,
+    address: resolved.revenueVault,
     abi: revenueVaultAbi,
     functionName: "snapshotCount",
   });
@@ -304,7 +525,7 @@ export async function loadSnapshots(ticker: string): Promise<Snapshot[]> {
   const rows = await Promise.all(
     ids.map((id) =>
       basePublicClient.readContract({
-        address: agent.revenueVault,
+        address: resolved.revenueVault,
         abi: revenueVaultAbi,
         functionName: "snapshotAt",
         args: [id],
@@ -323,10 +544,11 @@ export async function loadSnapshots(ticker: string): Promise<Snapshot[]> {
 
 export async function loadInferences(ticker: string): Promise<InferenceLog[]> {
   const operatorUrl = process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
-  const agent = getAgent(ticker);
+  const resolved = await resolveAgentForReads(ticker);
+  if (!resolved) return [];
 
   try {
-    const res = await fetch(`${operatorUrl}/receipts?tokenId=${agent.tokenId}`, {
+    const res = await fetch(`${operatorUrl}/receipts?tokenId=${resolved.tokenId}`, {
       headers: { Accept: "application/json" },
       cache: "no-store",
     });

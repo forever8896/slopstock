@@ -32,6 +32,8 @@ import { OpenAICompatBackend, ZGComputeBackend, getZGBroker } from "./llm-backen
 import type { AgentRuntime } from "./types.ts";
 import { OpenAICompatRuntime } from "./openai-compat.ts";
 import { HermesAgentRuntime } from "./hermes.ts";
+import { ToolsLiteRuntime } from "./tools-lite.ts";
+import { loadAndMaterialize, ManifestLoadError } from "./manifest-loader.ts";
 
 export interface RuntimeRouter {
   forToken(tokenId: bigint): Promise<AgentRuntime>;
@@ -59,13 +61,51 @@ class DefaultRuntimeRouter implements RuntimeRouter {
     const { getDynamicAgentSync } = await import("./dynamic-cache.ts");
     const dyn = getDynamicAgentSync(tokenId);
     if (dyn) {
-      const dynBackend = new OpenAICompatBackend({
-        baseUrl: this.config.COMPUTE_BASE_URL,
-        apiKey: this.config.COMPUTE_API_KEY,
-        model: dyn.model,
-      });
-      // Always openai-compat for dynamic agents v1 — Hermes-pattern
-      // requires seed files, which a browser-only mint can't pin.
+      // Per-agent backend choice. v1 dynamic agents without `backend` field
+      // default to openai-compat for backward compat.
+      const dynBackendKind = dyn.backend ?? "openai-compat";
+      let dynBackend: LLMBackend;
+      if (dynBackendKind === "0g-compute") {
+        // Use the shared 0G broker singleton — provider determines the model
+        // via TeeML attestation; dyn.model is informational only.
+        dynBackend = await this.backendFor("0g-compute");
+      } else {
+        // Per-agent OpenAICompatBackend so each agent uses its chosen Venice model.
+        dynBackend = new OpenAICompatBackend({
+          baseUrl: this.config.COMPUTE_BASE_URL,
+          apiKey: this.config.COMPUTE_API_KEY,
+          model: dyn.model,
+        });
+      }
+
+      // Real-Agent Launch: if this dynamic agent was minted with a manifest,
+      // route to the tools-lite runtime so it gets a real tool loop. Hermes
+      // tier in Phase 2 will route here too; for Phase 1 we down-route hermes
+      // tier to tools-lite so the demo arc never blocks on full Hermes.
+      if (dyn.bundleManifestCid && dyn.runtimeTier && dyn.runtimeTier !== "openai-compat") {
+        try {
+          const materialized = await loadAndMaterialize({
+            tokenId: dyn.tokenId,
+            bundleManifestCid: dyn.bundleManifestCid,
+            ...(dyn.manifestShadow ? { manifestShadow: dyn.manifestShadow } : {}),
+            dataDir: this.config.AGENTS_DATA_DIR,
+          });
+          return new ToolsLiteRuntime(dynBackend, {
+            manifest: materialized,
+            config: this.config,
+            ...(this.clients ? { clients: this.clients } : {}),
+            peerOperatorUrl: `http://127.0.0.1:${this.config.HTTP_PORT}`,
+          });
+        } catch (err) {
+          if (err instanceof ManifestLoadError) {
+            console.warn(`[runtime/router] manifest load failed; falling back to one-shot: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      // Fallback: one-shot openai-compat runtime with the dynamic system prompt.
       return new OpenAICompatRuntime(dynBackend, {
         systemPromptOverride: dyn.systemPrompt,
       });

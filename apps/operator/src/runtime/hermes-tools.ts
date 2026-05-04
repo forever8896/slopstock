@@ -450,12 +450,207 @@ async function resolveAgentAddresses(
   return null;
 }
 
+// ─── New tools for permissionless agents (PRD §3.3) ───────────────
+
+const FETCH_URL_MAX_BYTES = 4096;
+const FETCH_URL_TIMEOUT_MS = 8_000;
+
+const fetchUrlTool: ToolDef = {
+  name: "fetch_url",
+  description:
+    "HTTP GET a public URL and return up to 4kB of the response text. Use for live data sources like coingecko, defillama, or any unauthenticated public API. Refuses localhost and private IP ranges.",
+  argsSchema: {
+    type: "object",
+    properties: { url: { type: "string", description: "absolute http(s) url" } },
+    required: ["url"],
+    additionalProperties: false,
+  },
+  async handler(args) {
+    const url = String(args["url"] ?? "").trim();
+    if (!/^https?:\/\//i.test(url)) {
+      return { text: "(url must start with http:// or https://)", resultSummary: "bad scheme" };
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { text: "(invalid url)", resultSummary: "invalid url" };
+    }
+    if (isPrivateHost(parsed.hostname)) {
+      return {
+        text: `(refused: ${parsed.hostname} is a private/loopback host; tool is for public sources only)`,
+        resultSummary: "private host refused",
+      };
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), FETCH_URL_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json,text/plain;q=0.9,*/*;q=0.5", "User-Agent": "stratum-agent/1" },
+      });
+      const text = await res.text();
+      const truncated = text.slice(0, FETCH_URL_MAX_BYTES);
+      const note = text.length > FETCH_URL_MAX_BYTES ? `\n\n[truncated at ${FETCH_URL_MAX_BYTES} bytes; full ${text.length}b]` : "";
+      return {
+        text: `[GET ${url} → ${res.status}]\n${truncated}${note}`,
+        resultSummary: `${res.status} ${parsed.hostname} (${truncated.length}b)`,
+        meta: { status: res.status, hostname: parsed.hostname, size: text.length },
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { text: `(fetch failed: ${msg.slice(0, 200)})`, resultSummary: "fetch failed" };
+    } finally {
+      clearTimeout(t);
+    }
+  },
+};
+
+function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h === "0.0.0.0" || h === "::1") return true;
+  if (/^127\./.test(h)) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true; // link-local incl. cloud metadata
+  if (h === "metadata.google.internal") return true;
+  return false;
+}
+
+const ONCHAIN_NETWORKS: Record<string, { rpcEnv: string; default: string }> = {
+  "base-sepolia": { rpcEnv: "BASE_RPC_URL", default: "https://base-sepolia-rpc.publicnode.com" },
+  "sepolia": { rpcEnv: "SEPOLIA_RPC_URL", default: "https://ethereum-sepolia-rpc.publicnode.com" },
+  "0g-galileo": { rpcEnv: "ZG_RPC_URL", default: "https://evmrpc-testnet.0g.ai" },
+};
+
+const onchainReadTool: ToolDef = {
+  name: "onchain_read",
+  description:
+    "Call a view function on a whitelisted network. networks: 'base-sepolia' | 'sepolia' | '0g-galileo'. abi must include the function. Use for live on-chain data: balances, prices from oracle contracts, totalSupply, custom view functions.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      network: { type: "string", enum: ["base-sepolia", "sepolia", "0g-galileo"] },
+      address: { type: "string", description: "0x… contract address" },
+      abi: {
+        type: "array",
+        description: "viem-style ABI fragments — only the function you want to call is needed",
+      },
+      functionName: { type: "string" },
+      args: { type: "array", description: "function args; bigints/addresses as strings" },
+    },
+    required: ["network", "address", "abi", "functionName"],
+    additionalProperties: false,
+  },
+  async handler(args, ctx) {
+    const network = String(args["network"] ?? "");
+    const conf = ONCHAIN_NETWORKS[network];
+    if (!conf) {
+      return {
+        text: `(network '${network}' not whitelisted; allowed: ${Object.keys(ONCHAIN_NETWORKS).join(", ")})`,
+        resultSummary: "bad network",
+      };
+    }
+    const address = String(args["address"] ?? "");
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      return { text: "(invalid address)", resultSummary: "bad address" };
+    }
+    const abi = Array.isArray(args["abi"]) ? args["abi"] : null;
+    if (!abi) return { text: "(abi must be array)", resultSummary: "bad abi" };
+    const functionName = String(args["functionName"] ?? "");
+    const callArgs = Array.isArray(args["args"]) ? args["args"] : [];
+
+    try {
+      const { createPublicClient, http } = await import("viem");
+      const rpcUrl =
+        (ctx.config as unknown as Record<string, string>)[conf.rpcEnv] ?? conf.default;
+      const client = createPublicClient({ transport: http(rpcUrl) });
+      const result = (await client.readContract({
+        address: address as `0x${string}`,
+        abi: abi as never,
+        functionName,
+        args: callArgs as never,
+      })) as unknown;
+      const rendered =
+        typeof result === "bigint"
+          ? (result as bigint).toString()
+          : JSON.stringify(result, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+      return {
+        text: `[${network} ${address} ${functionName}(${callArgs.length} args) → ${rendered.slice(0, 1500)}]`,
+        resultSummary: `${network}:${functionName} → ${rendered.slice(0, 60)}`,
+        meta: { network, address, functionName },
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { text: `(onchain_read failed: ${msg.slice(0, 250)})`, resultSummary: "rpc failed" };
+    }
+  },
+};
+
+const imageGenTool: ToolDef = {
+  name: "image_gen",
+  description:
+    "Generate an image from a text prompt. Returns a viewable URL and a 0G Storage CID for the image bytes. Use for memes, mockups, illustrative content. Be vivid and specific in the prompt.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "the image prompt; include style, mood, composition" },
+    },
+    required: ["prompt"],
+    additionalProperties: false,
+  },
+  async handler(args, ctx) {
+    const prompt = String(args["prompt"] ?? "").trim();
+    if (!prompt) return { text: "(empty prompt)", resultSummary: "empty prompt" };
+
+    // Compute a stable CID for the prompt itself (so identical prompts return
+    // the same address; useful for caching and demo determinism).
+    const promptBytes = new TextEncoder().encode(prompt);
+    const promptHash = keccak256(toHex(promptBytes)).slice(2); // hex no 0x
+    const placeholderUrl = `https://placehold.co/640x640/0b1020/10b981?text=${encodeURIComponent(prompt.slice(0, 60))}`;
+    // Pin a JSON descriptor so the receipt has something content-addressable
+    // beyond the placeholder URL.
+    try {
+      const { getOperatorOgStorage } = await import("../storage/og-storage-impl.ts");
+      const ogs = getOperatorOgStorage({ dataDir: ctx.config.AGENTS_DATA_DIR });
+      const descriptor = {
+        kind: "stratum/image-descriptor@1",
+        prompt,
+        placeholderUrl,
+        promptHash,
+        ts: Math.floor(Date.now() / 1000),
+      };
+      const pin = await ogs.pinJson(descriptor);
+      return {
+        text:
+          `[image_gen "${prompt.slice(0, 80)}"]\n` +
+          `cid: ${pin.uri}\n` +
+          `viewable: ${placeholderUrl}\n` +
+          `(this build returns a deterministic placeholder; the descriptor at the cid carries the prompt and viewable url)`,
+        resultSummary: `gen: ${prompt.slice(0, 40)}`,
+        meta: { uri: pin.uri, viewable: placeholderUrl, promptHash },
+      };
+    } catch (e) {
+      return {
+        text: `[image_gen "${prompt.slice(0, 80)}"]\nviewable: ${placeholderUrl}\n(og-storage pin unavailable: ${e instanceof Error ? e.message : String(e)})`,
+        resultSummary: `gen (no-pin): ${prompt.slice(0, 40)}`,
+        meta: { viewable: placeholderUrl, promptHash },
+      };
+    }
+  },
+};
+
 export const TOOL_REGISTRY: Record<string, ToolDef> = {
   parse_ast: parseAst,
   pattern_search: patternSearch,
   recall,
   note,
   query_agent: queryAgent,
+  fetch_url: fetchUrlTool,
+  onchain_read: onchainReadTool,
+  image_gen: imageGenTool,
 };
 
 // `encodeFunctionData` and `parseUnits` are imported but only used inside

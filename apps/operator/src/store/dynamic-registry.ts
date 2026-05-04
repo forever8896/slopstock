@@ -11,17 +11,26 @@ import { existsSync, mkdirSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import type { AgentManifest } from "@stratum/shared";
+
 export interface DynamicAgent {
   tokenId: string;
   ticker: string;
   description: string;
   systemPrompt: string;
-  /** OpenAI-compat model id to use for this agent's inferences. */
+  /** OpenAI-compat model id (Venice). For backend === "0g-compute" this is
+   *  informational only — the actual model is determined by the provider's
+   *  TeeML attestation at call time. */
   model: string;
   /** Smallest-unit USDC per call, e.g. "500000" for $0.50. */
   perCallSmallest: string;
   perCallHuman: string;
   runtime: "openai-compat" | "hermes";
+  /** Compute backend for this agent's inferences.
+   *    "openai-compat" → Venice (or any OpenAI-shaped HTTP endpoint)
+   *    "0g-compute"    → 0G Compute Network broker, TeeML-verified sealed inference
+   *  Optional for backward-compat with v1 dynamic agents (default openai-compat). */
+  backend?: "openai-compat" | "0g-compute";
   creator: string;
   txHash: string;
   createdAt: number;
@@ -34,6 +43,18 @@ export interface DynamicAgent {
     maxShares: string;
     deployedAt: number;
   };
+  // ─── Manifest fields (set when the agent was minted with a real-agent
+  //     bundle on 0G Storage). Optional for backward compat with v1 dynamic
+  //     agents. See docs/12-real-agent-launch.md. ────────────────────────
+  /** keccak256 of canonical(manifest), no `0x` prefix. Equals iNFT.metadataHash. */
+  bundleManifestCid?: string;
+  /** Capability template id (e.g. "cross-agent-orchestrator"). Surfaced in UI. */
+  templateId?: string;
+  /** Runtime tier picked at mint. Routes to openai-compat | tools-lite | hermes. */
+  runtimeTier?: "openai-compat" | "tools-lite" | "hermes";
+  /** Defensive copy of the full manifest. Used when 0G Storage pull fails;
+   *  also lets the operator survive cold-cache restarts without re-fetching. */
+  manifestShadow?: AgentManifest;
 }
 
 import { setDynamicSnapshot } from "../runtime/dynamic-cache.ts";

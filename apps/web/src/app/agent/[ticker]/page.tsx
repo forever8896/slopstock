@@ -51,6 +51,54 @@ export default async function AgentDetailPage({ params }: PageProps) {
           </div>
           <p className="agent-desc">{agent.description}</p>
 
+          {agent.realAgent ? (
+            <div
+              style={{
+                marginTop: 6,
+                padding: "10px 12px",
+                background: "rgba(16,185,129,0.05)",
+                border: "1px solid rgba(16,185,129,0.30)",
+                borderRadius: 4,
+                fontSize: 12,
+                color: "var(--fg-2)",
+              }}
+            >
+              <div style={{ marginBottom: 6 }}>
+                <span className="acc" style={{ fontWeight: 600 }}>real-agent launch</span>
+                {" · "}template{" "}
+                <b className="acc">{agent.realAgent.templateId}</b>
+                {" · "}runtime{" "}
+                <b>{agent.realAgent.runtimeTier}</b>
+                {" · "}backend{" "}
+                <b>{agent.realAgent.backend}</b>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                {agent.realAgent.tools.length === 0 ? (
+                  <span className="pill" style={{ fontSize: 9 }}>no tools</span>
+                ) : (
+                  agent.realAgent.tools.map((t) => (
+                    <span key={t} className="pill" style={{ fontSize: 9 }}>{t}</span>
+                  ))
+                )}
+                {agent.realAgent.patternCount > 0 ? (
+                  <span className="pill" style={{ fontSize: 9 }}>
+                    {agent.realAgent.patternCount} patterns
+                  </span>
+                ) : null}
+                {agent.realAgent.skillCount > 0 ? (
+                  <span className="pill" style={{ fontSize: 9 }}>
+                    {agent.realAgent.skillCount} skills
+                  </span>
+                ) : null}
+              </div>
+              <div style={{ fontSize: 10, color: "var(--mute)" }}>
+                manifest{" "}
+                <span className="acc">{shortAddr(agent.realAgent.bundleManifestCid as `0x${string}`, 8)}</span>
+                {" · pinned to 0g storage · binds metadataHash on chain"}
+              </div>
+            </div>
+          ) : null}
+
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
             <Link className="btn primary" href={`/agent/${agent.ticker}/subscribe`}>
               subscribe — submit inference →

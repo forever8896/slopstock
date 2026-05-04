@@ -125,7 +125,7 @@ export default async function Home() {
           <tbody>
             {agents.map((a) => {
               const isDynamic = "permissionless" in a;
-              const href = isDynamic ? `/launch` : `/agent/${a.ticker}`;
+              const href = `/agent/${a.ticker}`;
               return (
                 <tr key={`${a.tokenId}-${a.ticker}`} className="click">
                   <td className="ticker">
