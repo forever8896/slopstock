@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { Crumb } from "../../components/crumb";
+import { Rail } from "../../components/rail";
 import {
   useAccount,
   useChainId,
@@ -9,7 +11,7 @@ import {
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { decodeEventLog, keccak256, toBytes, stringToHex } from "viem";
+import { decodeEventLog, stringToHex, parseUnits } from "viem";
 import {
   ZG_GALILEO,
   TEMPLATE_LIST,
@@ -20,13 +22,28 @@ import {
   type RuntimeTier,
 } from "@stratum/shared";
 import { pinManifestToOgStorage } from "../../lib/og-storage";
+import { InferenceOutput } from "../../components/inference-output";
 
 type Hex = `0x${string}`;
 
 const ZG_CHAIN_ID = ZG_GALILEO.chainId;
+const BASE_CHAIN_ID = 84532;
 const AGENT_NFT_ADDRESS = ZG_GALILEO.agentNft;
 const OPERATOR_URL =
   process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
+
+const erc20ApproveAbi = [
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+] as const;
 
 const mintAbi = [
   {
@@ -53,32 +70,10 @@ const mintAbi = [
   },
 ] as const;
 
-/** Models we know Venice serves and that the operator can route to. */
-const MODELS: Array<{ id: string; label: string; goodFor: string }> = [
-  { id: "qwen3-coder-480b-a35b-instruct-turbo", label: "qwen3-coder-480b · turbo", goodFor: "code, audits, structured json" },
-  { id: "qwen3-235b-a22b-instruct-2507", label: "qwen3-235b-a22b", goodFor: "general reasoning, instruction-following" },
-  { id: "claude-opus-4-7", label: "claude-opus-4-7", goodFor: "highest-quality reasoning, long context" },
-  { id: "google-gemma-4-31b-it", label: "gemma-4-31b-it", goodFor: "fast, cheap, decent quality" },
-  { id: "grok-41-fast", label: "grok-4.1-fast", goodFor: "broad knowledge, fast" },
-];
-
-const RUNTIME_TIERS: Array<{ id: RuntimeTier; label: string; blurb: string; badge?: string }> = [
-  {
-    id: "openai-compat",
-    label: "openai-compat",
-    blurb: "single-shot. fastest, simplest, no tools. just system-prompt + model.",
-  },
-  {
-    id: "tools-lite",
-    label: "tools-lite",
-    blurb: "per-call agent loop with the template's tool whitelist. fresh memory each call.",
-  },
-  {
-    id: "hermes",
-    label: "hermes",
-    blurb: "full agent. persistent memory, multi-turn, the same runtime AUDIT uses.",
-    badge: "experimental",
-  },
+const RUNTIME_TIERS: Array<{ id: RuntimeTier; label: string; sub: string }> = [
+  { id: "openai-compat", label: "openai-compat", sub: "single-shot · no tools" },
+  { id: "tools-lite", label: "tools-lite", sub: "per-call agent loop" },
+  { id: "hermes", label: "hermes", sub: "persistent memory · skill auto-create" },
 ];
 
 export function LaunchClient() {
@@ -87,21 +82,25 @@ export function LaunchClient() {
   const { switchChain } = useSwitchChain();
   const onZg = chainId === ZG_CHAIN_ID;
 
-  // Default to the headline cross-agent-orchestrator template; user can switch.
   const initialTemplate = TEMPLATE_LIST[0] as CapabilityTemplate;
   const [templateId, setTemplateId] = useState<CapabilityTemplateId>(initialTemplate.id);
   const [ticker, setTicker] = useState("WHALE");
   const [description, setDescription] = useState(initialTemplate.blurb);
   const [systemPrompt, setSystemPrompt] = useState(initialTemplate.systemPrompt);
-  const [model, setModel] = useState(initialTemplate.defaultModel);
-  const [runtimeTier, setRuntimeTier] = useState<RuntimeTier>(initialTemplate.suggestedTier);
-  const [backend, setBackend] = useState<"openai-compat" | "0g-compute">("openai-compat");
+  const [runtimeTier, setRuntimeTier] = useState<RuntimeTier>("hermes");
+  const [backend, setBackend] = useState<"openai-compat" | "0g-compute">("0g-compute");
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
-  const ZG_TEE_PROVIDER = "0xa48f01287233509FD694a22Bf840225062E67836";
-  // Provider currently serves qwen2.5-7b-instruct via TeeML; this can change
-  // when the provider redeploys, so we stay descriptive.
-  const ZG_TEE_MODEL = "provider-served · TeeML-attested";
+  const [showSkillsEditor, setShowSkillsEditor] = useState(false);
+  const [customSkills, setCustomSkills] = useState<Array<{ name: string; body: string }>>(
+    (initialTemplate.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
+  );
+
+  const ZG_TEE_PROVIDER = "0x1B3AAef3ae5050EEE04ea38cD4B087472BD85EB0";
+  const ZG_TEE_NETWORK = "0G mainnet · chainId 16661";
   const [perCall, setPerCall] = useState("0.10");
+
+  type WizStep = "pick" | "identity" | "review" | "live";
+  const [wizStep, setWizStep] = useState<WizStep>("pick");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [mintedTokenId, setMintedTokenId] = useState<string | null>(null);
@@ -115,6 +114,9 @@ export function LaunchClient() {
   const [pinResult, setPinResult] = useState<{ rootHash: string; uri: string; size: number } | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
   const [pinnedManifest, setPinnedManifest] = useState<AgentManifest | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [approved, setApproved] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
   const [finance, setFinance] = useState<{
     shareToken: string;
     revenueVault: string;
@@ -129,7 +131,6 @@ export function LaunchClient() {
     data: receipt,
   } = useWaitForTransactionReceipt({ hash: txHash, chainId: ZG_CHAIN_ID });
 
-  // Decode Transfer log to extract minted tokenId.
   useEffect(() => {
     if (!txConfirmed || !receipt) return;
     for (const log of receipt.logs) {
@@ -147,6 +148,7 @@ export function LaunchClient() {
           args.to.toLowerCase() === address?.toLowerCase()
         ) {
           setMintedTokenId(args.tokenId.toString());
+          setWizStep("live");
           break;
         }
       } catch {
@@ -155,15 +157,12 @@ export function LaunchClient() {
     }
   }, [txConfirmed, receipt, address]);
 
-  // After mint, register with operator so the agent is queryable. We pass
-  // the pinned manifest + bundleManifestCid so the operator can verify the
-  // on-chain hash binding before accepting the registration.
   useEffect(() => {
     if (!mintedTokenId || registered || !address || !txHash) return;
     if (!pinnedManifest || !pinResult) return;
     (async () => {
       try {
-        const res = await fetch(`${OPERATOR_URL}/agents/register`, {
+        await fetchJsonWithRetry(`${OPERATOR_URL}/agents/register`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -181,7 +180,6 @@ export function LaunchClient() {
             manifest: pinnedManifest,
           }),
         });
-        if (!res.ok) throw new Error(`operator ${res.status}: ${await res.text()}`);
         setRegistered(true);
       } catch (e) {
         setRegisterError(e instanceof Error ? e.message : String(e));
@@ -189,7 +187,21 @@ export function LaunchClient() {
     })();
   }, [mintedTokenId, registered, address, txHash, ticker, description, runtimeTier, backend, pinnedManifest, pinResult]);
 
-  /** Build the manifest from current form state. Pure — no I/O. */
+  const currentTemplate = useMemo<CapabilityTemplate>(
+    () => TEMPLATE_LIST.find((t) => t.id === templateId) ?? initialTemplate,
+    [templateId, initialTemplate],
+  );
+
+  function applyTemplate(t: CapabilityTemplate) {
+    setTemplateId(t.id);
+    setDescription(t.blurb);
+    setSystemPrompt(t.systemPrompt);
+    setTestInput(t.defaultTestInput);
+    setCustomSkills(
+      (t.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
+    );
+  }
+
   function buildManifest(creator: Hex): AgentManifest {
     return {
       schemaVersion: "stratum/agent-manifest@1",
@@ -202,14 +214,16 @@ export function LaunchClient() {
       brain: {
         templateId,
         systemPrompt,
-        model: backend === "0g-compute" ? "0g-tee-provider-served" : model,
+        model: backend === "0g-compute" ? "0g-tee-provider-served" : initialTemplate.defaultModel,
         backend,
         runtimeTier,
       },
       capabilities: {
         tools: [...currentTemplate.tools],
         patterns: (currentTemplate.patterns ?? []).map((p) => ({ name: p.name, body: p.body })),
-        skills: (currentTemplate.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
+        skills: customSkills
+          .map((s) => ({ name: s.name.trim(), body: s.body }))
+          .filter((s) => s.name.length > 0 && s.body.trim().length > 0),
       },
       pricing: {
         perCallSmallest: String(Math.round(Number(perCall) * 1e6)),
@@ -222,13 +236,11 @@ export function LaunchClient() {
     };
   }
 
-  // Live preview of the manifest hash so the right-hand panel can show what
-  // will go on chain. Changes whenever any form field changes.
   const previewManifest = useMemo<AgentManifest | null>(() => {
     if (!address) return null;
     return buildManifest(address as Hex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, ticker, description, systemPrompt, model, backend, runtimeTier, perCall, templateId]);
+  }, [address, ticker, description, systemPrompt, backend, runtimeTier, perCall, templateId, customSkills]);
   const previewManifestHash = useMemo(
     () => (previewManifest ? computeManifestHash(previewManifest) : null),
     [previewManifest],
@@ -249,8 +261,6 @@ export function LaunchClient() {
     setRegisterError(null);
     setTestOutput(null);
 
-    // 1. Build + pin the manifest to 0G Storage. The pin must succeed before
-    //    we mint, because metadataHash on chain is the manifest's hash.
     setPinning(true);
     let manifest: AgentManifest;
     let pin: { rootHash: string; uri: string; size: number };
@@ -274,7 +284,6 @@ export function LaunchClient() {
     }
     setPinning(false);
 
-    // 2. Mint with metadataHash = keccak(canonical(manifest)).
     try {
       const metadataHash = `0x${pin.rootHash.replace(/^0x/, "")}` as Hex;
       const metadataURI = pin.uri;
@@ -293,42 +302,48 @@ export function LaunchClient() {
     }
   }
 
-  const currentTemplate = useMemo<CapabilityTemplate>(
-    () => TEMPLATE_LIST.find((t) => t.id === templateId) ?? initialTemplate,
-    [templateId, initialTemplate],
-  );
-
-  function applyTemplate(t: CapabilityTemplate) {
-    setTemplateId(t.id);
-    setDescription(t.blurb);
-    setSystemPrompt(t.systemPrompt);
-    setModel(t.defaultModel);
-    setRuntimeTier(t.suggestedTier);
-    setTestInput(t.defaultTestInput);
+  async function approveShares() {
+    if (!finance || !address) return;
+    setApproving(true);
+    setApproveError(null);
+    try {
+      if (chainId !== BASE_CHAIN_ID) {
+        await switchChain({ chainId: BASE_CHAIN_ID });
+      }
+      const maxSharesWei = parseUnits("100000", 18);
+      await writeContractAsync({
+        address: finance.shareToken as Hex,
+        abi: erc20ApproveAbi,
+        functionName: "approve",
+        args: [finance.ipoSale as Hex, maxSharesWei],
+        chainId: BASE_CHAIN_ID,
+      });
+      setApproved(true);
+    } catch (e) {
+      setApproveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApproving(false);
+    }
   }
 
   async function deployFinance() {
-    if (!mintedTokenId || !registered) return;
+    if (!mintedTokenId) return;
+    if (financeDeploying || finance) return;
     setFinanceDeploying(true);
     setFinanceError(null);
     try {
-      const res = await fetch(`${OPERATOR_URL}/agents/${mintedTokenId}/deploy-finance`, {
+      // Kick off (idempotent server-side: if already running for this tokenId,
+      // it just reports the current state). Then poll until terminal.
+      await fetchJsonWithRetry(`${OPERATOR_URL}/agents/${mintedTokenId}/deploy-finance`, {
         method: "POST",
         headers: { "content-type": "application/json" },
       });
-      const txt = await res.text();
-      if (!res.ok) throw new Error(`operator ${res.status}: ${txt.slice(0, 400)}`);
-      const body = JSON.parse(txt) as {
-        agent?: { finance?: { shareToken: string; revenueVault: string; ipoSale: string } };
-        txHashes?: { shareToken: string; revenueVault: string; ipoSale: string };
-      };
-      const f = body.agent?.finance;
-      if (!f) throw new Error("operator returned no finance addresses");
+      const result = await pollFinanceStatus(mintedTokenId);
       setFinance({
-        shareToken: f.shareToken,
-        revenueVault: f.revenueVault,
-        ipoSale: f.ipoSale,
-        txHashes: body.txHashes ?? { shareToken: "", revenueVault: "", ipoSale: "" },
+        shareToken: result.finance.shareToken,
+        revenueVault: result.finance.revenueVault,
+        ipoSale: result.finance.ipoSale,
+        txHashes: result.txHashes ?? { shareToken: "", revenueVault: "", ipoSale: "" },
       });
     } catch (e) {
       setFinanceError(e instanceof Error ? e.message : String(e));
@@ -337,14 +352,22 @@ export function LaunchClient() {
     }
   }
 
+  // Auto-kick the finance deploy as soon as the agent is registered. The
+  // operator already kicks it off server-side from /agents/register, but
+  // calling deploy-finance from the client too is idempotent and lets us
+  // start polling for the result without a manual click.
+  useEffect(() => {
+    if (!registered || !mintedTokenId) return;
+    if (finance || financeDeploying || financeError) return;
+    void deployFinance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registered, mintedTokenId]);
+
   async function runTest() {
     if (!mintedTokenId || !registered) return;
     setTestRunning(true);
     setTestOutput(null);
     try {
-      // Direct LLM-only test: call the operator's runtime via a debug shim.
-      // We don't go through x402 here — just exercise the registered system
-      // prompt + model so the user sees their agent talking.
       const res = await fetch(`${OPERATOR_URL}/agents/test`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -361,556 +384,996 @@ export function LaunchClient() {
     }
   }
 
+  // Step index for the Rail — all steps before "live" share the rail; live is last.
+  const stepIndex =
+    wizStep === "pick" ? 0 : wizStep === "identity" ? 1 : wizStep === "review" ? 2 : 3;
+
+  const stepLabel =
+    wizStep === "pick"
+      ? "capability template"
+      : wizStep === "identity"
+        ? "identity + price"
+        : wizStep === "review"
+          ? "review + mint"
+          : "go live";
+
+  // Skills surfaced as a count for the "skills + tools" collapsed row.
+  const skillCount = customSkills.filter((s) => s.name.trim() && s.body.trim()).length;
+
   return (
     <>
-      <div className="crumb">
-        <Link href="/">markets</Link> <span className="muted">/</span>{" "}
-        <span className="acc">launch agent</span>
-        <span style={{ float: "right", color: "var(--mute-2)" }}>
-          permissionless · 0g-galileo · agent nft <span className="fg2">{shortish(AGENT_NFT_ADDRESS)}</span>
-        </span>
+      <Crumb
+        path={
+          <>
+            ~/<Link href="/">markets</Link> · <Link href="/launch">launch</Link> ·{" "}
+            <b style={{ color: "var(--fg)" }}>step 0{stepIndex + 1}</b> / 04 · {stepLabel}
+          </>
+        }
+        right={
+          <>
+            permissionless · 0g-galileo · agent nft{" "}
+            <span className="fg2">{shortish(AGENT_NFT_ADDRESS)}</span>
+          </>
+        }
+      />
+
+      <div style={{ marginBottom: 26 }}>
+        <Rail
+          steps={["template", "identity", "review + mint", "go live"]}
+          current={stepIndex}
+        />
       </div>
 
-      <section className="hero" data-screen-label="launch">
-        <div className="hero-l">
-          <div className="hero-tag">▌ slopstock · launch</div>
-          <h1 className="hero-h1">
-            ship a productive<br />
-            <em>agent.</em>
-          </h1>
-          <p className="hero-sub">
-            anyone can list. pick a capability template, name it, mint an erc-7857 iNFT.
-            the manifest pins to 0g storage; its hash binds on chain. the operator picks
-            it up immediately and serves it with real tools, real agent-to-agent calls,
-            real revenue to your shareholders.
-          </p>
-          <div className="hero-meta">
-            <span className="pill ok">▌ permissionless mint</span>
-            <span className="pill">erc-7857</span>
-            <span className="pill">0g storage</span>
-            <span className="pill">tools-lite runtime</span>
-            <span className="pill">live in &lt;30s</span>
-          </div>
+      {wizStep === "pick" ? (
+        <PickStep
+          templateId={templateId}
+          applyTemplate={applyTemplate}
+          onContinue={() => setWizStep("identity")}
+        />
+      ) : wizStep === "identity" ? (
+        <IdentityStep
+          ticker={ticker}
+          setTicker={setTicker}
+          description={description}
+          setDescription={setDescription}
+          perCall={perCall}
+          setPerCall={setPerCall}
+          runtimeTier={runtimeTier}
+          setRuntimeTier={setRuntimeTier}
+          backend={backend}
+          setBackend={setBackend}
+          currentTemplate={currentTemplate}
+          systemPrompt={systemPrompt}
+          setSystemPrompt={setSystemPrompt}
+          showSystemPromptEditor={showSystemPromptEditor}
+          setShowSystemPromptEditor={setShowSystemPromptEditor}
+          customSkills={customSkills}
+          setCustomSkills={setCustomSkills}
+          showSkillsEditor={showSkillsEditor}
+          setShowSkillsEditor={setShowSkillsEditor}
+          previewManifestHash={previewManifestHash}
+          skillCount={skillCount}
+          onBack={() => setWizStep("pick")}
+          onContinue={() => setWizStep("review")}
+        />
+      ) : wizStep === "review" ? (
+        <ReviewStep
+          ticker={ticker}
+          perCall={perCall}
+          currentTemplate={currentTemplate}
+          runtimeTier={runtimeTier}
+          backend={backend}
+          previewManifestHash={previewManifestHash}
+          pinResult={pinResult}
+          isConnected={isConnected}
+          onZg={onZg}
+          chainId={chainId}
+          switchChainTo={(id) => switchChain({ chainId: id })}
+          mint={mint}
+          pinning={pinning}
+          txPending={txPending}
+          mintedTokenId={mintedTokenId}
+          txHash={txHash ?? null}
+          errorMsg={errorMsg}
+          pinError={pinError}
+          registerError={registerError}
+          onBack={() => setWizStep("identity")}
+        />
+      ) : (
+        <LiveStep
+          ticker={ticker}
+          mintedTokenId={mintedTokenId}
+          registered={registered}
+          txHash={txHash ?? null}
+          testInput={testInput}
+          setTestInput={setTestInput}
+          runTest={runTest}
+          testRunning={testRunning}
+          testOutput={testOutput}
+          finance={finance}
+          deployFinance={deployFinance}
+          financeDeploying={financeDeploying}
+          financeError={financeError}
+          approveShares={approveShares}
+          approving={approving}
+          approveError={approveError}
+          approved={approved}
+          chainId={chainId}
+          ZG_TEE_PROVIDER={ZG_TEE_PROVIDER}
+          ZG_TEE_NETWORK={ZG_TEE_NETWORK}
+        />
+      )}
+    </>
+  );
+}
 
-          <div className="agent-event" style={{ marginTop: 14 }}>
-            <span className="glyph">↳</span>
-            <span>
-              <b>capability templates</b> wire real tools (query_agent, fetch_url, image_gen,
-              parse_ast, …). <span className="muted">your tokenId&apos;s metadataHash is keccak(manifest);
-              tampering with any tool, prompt, or pattern breaks the chain commit.</span>
-            </span>
-          </div>
+/* ───────────── Step 1 · pick capability template ───────────── */
+
+function PickStep({
+  templateId,
+  applyTemplate,
+  onContinue,
+}: {
+  templateId: CapabilityTemplateId;
+  applyTemplate: (t: CapabilityTemplate) => void;
+  onContinue: () => void;
+}) {
+  const selected = TEMPLATE_LIST.find((t) => t.id === templateId);
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1 style={{ fontSize: 30, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
+          pick a capability template
+          <span style={{ color: "var(--accent)" }} className="blink">▌</span>
+        </h1>
+        <span className="mono-h">{TEMPLATE_LIST.length} templates · clone & customize after mint</span>
+      </div>
+      <div style={{ fontSize: 15, color: "var(--fg-2)" }}>
+        each template ships pre-wired tools + a system prompt. you&apos;ll edit them in step 02.
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: 14,
+        }}
+      >
+        {TEMPLATE_LIST.map((t) => {
+          const skillCount = t.skills?.length ?? 0;
+          const patternCount = t.patterns?.length ?? 0;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              className={`tcard ${templateId === t.id ? "on" : ""}`}
+              onClick={() => applyTemplate(t)}
+            >
+              <div className="tname">{t.label}</div>
+              <div className="tblurb">{t.blurb}</div>
+              <div className="ttools">
+                {t.tools.map((tool) => (
+                  <span key={tool} className="pill solid">{tool}</span>
+                ))}
+              </div>
+              <div className="ttier">
+                <span><b>{t.tools.length}</b> tools</span>
+                <span><b>{skillCount}</b> skill{skillCount === 1 ? "" : "s"}</span>
+                <span><b>{patternCount}</b> pattern{patternCount === 1 ? "" : "s"}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+        <div style={{ fontSize: 14, color: "var(--mute)" }}>
+          <span style={{ color: "var(--fg-2)" }}>▌ selected:</span>{" "}
+          <b className="acc">{selected?.label ?? "—"}</b> · pre-wired tools, your prompt + skills next
         </div>
-
-        <div className="hero-r">
-          <div className="loop-head">
-            <span>capability templates · pick one</span>
-            <span>{TEMPLATE_LIST.length} live</span>
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {TEMPLATE_LIST.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`pay-card ${templateId === t.id ? "on" : ""}`}
-                style={{ textAlign: "left" }}
-                onClick={() => applyTemplate(t)}
-              >
-                <div className="h">
-                  <span className="t">{t.label}</span>
-                  <span className="badge">{templateId === t.id ? "selected" : t.sponsorTag}</span>
-                </div>
-                <div className="body">{t.blurb}</div>
-                <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {t.tools.map((tool) => (
-                    <span key={tool} className="pill" style={{ fontSize: 9 }}>{tool}</span>
-                  ))}
-                  <span className="pill ok" style={{ fontSize: 9 }}>tier · {t.suggestedTier}</span>
-                </div>
-              </button>
-            ))}
-          </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Link className="btn" href="/">esc · cancel</Link>
+          <button className="btn primary" onClick={onContinue}>
+            continue to identity →
+          </button>
         </div>
-      </section>
+      </div>
+    </section>
+  );
+}
 
-      <section className="work">
-        <div className="work-l">
-          <div className="work-section">
-            <h3>01 · agent identity</h3>
-            <div className="ds-grid cols-2" style={{ gap: 12 }}>
-              <Field label="ticker" value={ticker} onChange={setTicker} placeholder="MYBOT" />
-              <Field label="per-call (usdc)" value={perCall} onChange={setPerCall} placeholder="0.10" />
+/* ───────────── Step 2 · identity + price + live manifest ───────────── */
+
+function IdentityStep(props: {
+  ticker: string;
+  setTicker: (v: string) => void;
+  description: string;
+  setDescription: (v: string) => void;
+  perCall: string;
+  setPerCall: (v: string) => void;
+  runtimeTier: RuntimeTier;
+  setRuntimeTier: (v: RuntimeTier) => void;
+  backend: "openai-compat" | "0g-compute";
+  setBackend: (v: "openai-compat" | "0g-compute") => void;
+  currentTemplate: CapabilityTemplate;
+  systemPrompt: string;
+  setSystemPrompt: (v: string) => void;
+  showSystemPromptEditor: boolean;
+  setShowSystemPromptEditor: (v: boolean | ((prev: boolean) => boolean)) => void;
+  customSkills: Array<{ name: string; body: string }>;
+  setCustomSkills: (v: Array<{ name: string; body: string }> | ((prev: Array<{ name: string; body: string }>) => Array<{ name: string; body: string }>)) => void;
+  showSkillsEditor: boolean;
+  setShowSkillsEditor: (v: boolean | ((prev: boolean) => boolean)) => void;
+  previewManifestHash: string | null;
+  skillCount: number;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
+  const {
+    ticker, setTicker, description, setDescription, perCall, setPerCall,
+    runtimeTier, setRuntimeTier, backend, setBackend, currentTemplate,
+    systemPrompt, setSystemPrompt, showSystemPromptEditor, setShowSystemPromptEditor,
+    customSkills, setCustomSkills, showSkillsEditor, setShowSkillsEditor,
+    previewManifestHash, skillCount, onBack, onContinue,
+  } = props;
+
+  const tickerOk = /^[A-Za-z][A-Za-z0-9]{0,7}$/.test(ticker);
+  const priceFee = (Number(perCall) * 0.95).toFixed(2);
+
+  return (
+    <section style={{ display: "grid", gridTemplateRows: "auto 1fr auto", rowGap: 22 }}>
+      <div>
+        <h1 style={{ fontSize: 30, fontWeight: 600, margin: "0 0 4px", letterSpacing: "-0.01em" }}>
+          name your agent
+        </h1>
+        <div style={{ fontSize: 15, color: "var(--fg-2)" }}>
+          ticker becomes its ENS subname under <code>slopstock.eth</code> + the ERC-20 share symbol. permanent.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 460px", gap: 28, alignItems: "start" }}>
+        {/* LEFT — form */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div className="ss-field">
+            <label>ticker · max 8 chars</label>
+            <div className={"inp" + (tickerOk ? " focus" : "")}>
+              <input
+                value={ticker}
+                onChange={(e) => setTicker(e.target.value.toUpperCase().slice(0, 8))}
+                style={{ textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}
+              />
+              <span className="suf">.slopstock.eth</span>
             </div>
-            <div style={{ marginTop: 12 }}>
-              <div className="up">description · shown on markets page</div>
-              <textarea
-                className="req"
-                style={{ minHeight: 60, marginTop: 6 }}
+            <div className="help">
+              {tickerOk ? <span className="ok">✓ available</span> : <span style={{ color: "var(--amber)" }}>letters + digits, must start with a letter</span>}
+              {" · resolves to 0g chain id "}{ZG_GALILEO.chainId}
+            </div>
+          </div>
+
+          <div className="ss-field">
+            <label>one-line description · shown on markets</label>
+            <div className="inp">
+              <input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+            <div className="help">
+              <span className="n">{description.length}</span>/200 chars
+            </div>
           </div>
 
-          <div className="work-section">
-            <h3>
-              02 · capability template{" "}
-              <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
-                {currentTemplate.label.toUpperCase()}
-              </span>
-            </h3>
-            <div className="muted" style={{ marginBottom: 8, fontSize: 11 }}>
-              picked: <b className="acc">{currentTemplate.label}</b> · {currentTemplate.blurb}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div className="ss-field">
+              <label>per-call price</label>
+              <div className="inp">
+                <span className="pre">$</span>
+                <input value={perCall} onChange={(e) => setPerCall(e.target.value)} />
+                <span className="suf">USDC</span>
+              </div>
+              <div className="help">
+                you receive <span className="n" style={{ color: "var(--fg-2)" }}>${priceFee}</span> per call
+              </div>
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-              {currentTemplate.tools.map((tool) => (
-                <span key={tool} className="pill" style={{ fontSize: 10 }}>{tool}</span>
-              ))}
-              <span className="pill ok" style={{ fontSize: 10 }}>
-                tier · {currentTemplate.suggestedTier}
-              </span>
-              <span className="pill" style={{ fontSize: 10 }}>
-                sponsor · {currentTemplate.sponsorTag}
-              </span>
-            </div>
-            <button
-              type="button"
-              className="btn"
-              style={{ fontSize: 11 }}
-              onClick={() => setShowSystemPromptEditor((v) => !v)}
-            >
-              {showSystemPromptEditor ? "hide system prompt" : "edit system prompt →"}
-            </button>
-            {showSystemPromptEditor ? (
-              <>
-                <textarea
-                  className="req"
-                  style={{ minHeight: 200, marginTop: 8 }}
-                  value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
-                  spellCheck={false}
-                />
-                <div style={{ marginTop: 6, fontSize: 11, color: "var(--mute)" }}>
-                  {systemPrompt.length} chars · keccak{" "}
-                  <span className="acc">
-                    {systemPrompt ? shortish(keccak256(toBytes(systemPrompt))) : "—"}
-                  </span>
-                </div>
-              </>
-            ) : null}
-          </div>
-
-          <div className="work-section">
-            <h3>
-              03 · compute backend{" "}
-              {backend === "0g-compute" ? (
-                <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
-                  TEE-ATTESTED
-                </span>
-              ) : (
-                <span className="muted" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
-                  HOSTED LLM
-                </span>
-              )}
-            </h3>
-            <div className="pay-grid" style={{ marginBottom: 12 }}>
-              <button
-                type="button"
-                className={`pay-card ${backend === "openai-compat" ? "on" : ""}`}
-                onClick={() => setBackend("openai-compat")}
+            <div className="ss-field">
+              <label>runtime tier</label>
+              <select
+                value={runtimeTier}
+                onChange={(e) => setRuntimeTier(e.target.value as RuntimeTier)}
+                style={{
+                  border: "1px solid var(--hair)",
+                  background: "var(--panel)",
+                  padding: "10px 12px",
+                  fontSize: 16,
+                  height: 48,
+                  color: "var(--fg)",
+                  borderRadius: 2,
+                  fontFamily: "inherit",
+                }}
               >
-                <div className="h">
-                  <span className="t">venice</span>
-                  <span className="badge">model breadth</span>
-                </div>
-                <div className="body">
-                  pick from qwen3-coder-480b, claude-opus-4-7, grok, gemma-4. fast, hosted, no tee
-                  attestation.
-                </div>
-              </button>
+                {RUNTIME_TIERS.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label} · {t.sub}
+                  </option>
+                ))}
+              </select>
+              <div className="help">
+                {runtimeTier === "hermes"
+                  ? "multi-turn agent loop · skills auto-create · runs the same way AUDIT does"
+                  : runtimeTier === "tools-lite"
+                    ? "agent loop with the template's tool whitelist · fresh memory each call"
+                    : "single-shot · system prompt + model · no tools"}
+              </div>
+            </div>
+          </div>
+
+          <div className="ss-field">
+            <label>compute backend</label>
+            <div className="pay-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
               <button
                 type="button"
                 className={`pay-card ${backend === "0g-compute" ? "on" : ""}`}
                 onClick={() => setBackend("0g-compute")}
               >
                 <div className="h">
-                  <span className="t">0g compute</span>
-                  <span className="badge">teeml-attested</span>
+                  <span className="t">0g compute · TEE</span>
+                  <span className="badge">deepseek v3</span>
                 </div>
                 <div className="body">
-                  inference runs inside intel tdx; broker verifies signature. each receipt carries{" "}
-                  <span className="acc">isValid</span>. provider determines model.
+                  intel TDX enclave on 0G mainnet. every reply signed by the on-chain TEE signer.
+                </div>
+              </button>
+              <button
+                type="button"
+                className={`pay-card ${backend === "openai-compat" ? "on" : ""}`}
+                onClick={() => setBackend("openai-compat")}
+              >
+                <div className="h">
+                  <span className="t">venice · hosted</span>
+                  <span className="badge">model breadth</span>
+                </div>
+                <div className="body">
+                  qwen, claude, grok, gemma. fast and cheap. no TEE attestation.
                 </div>
               </button>
             </div>
-
-            {backend === "openai-compat" ? (
-              <>
-                <div className="up" style={{ marginBottom: 6 }}>venice model</div>
-                <div style={{ display: "grid", gap: 6 }}>
-                  {MODELS.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`pay-card ${model === m.id ? "on" : ""}`}
-                      style={{ textAlign: "left" }}
-                      onClick={() => setModel(m.id)}
-                    >
-                      <div className="h">
-                        <span className="t">{m.label}</span>
-                        <span className="badge">{model === m.id ? "selected" : "click"}</span>
-                      </div>
-                      <div className="body">{m.goodFor}</div>
-                    </button>
-                  ))}
-                </div>
-                <div style={{ marginTop: 8, fontSize: 11, color: "var(--mute)" }}>
-                  served via venice → operator routes inferences here
-                </div>
-              </>
-            ) : (
-              <div className="kv" style={{ border: "1px solid rgba(16,185,129,0.35)", background: "rgba(16,185,129,0.04)" }}>
-                <div className="k">enclave</div>
-                <div className="v acc">intel tdx · teeml signed</div>
-                <div className="k">provider</div>
-                <div className="v">{shortish(ZG_TEE_PROVIDER, 6)}</div>
-                <div className="k">model</div>
-                <div className="v">
-                  {ZG_TEE_MODEL}{" "}
-                  <span className="muted">— determined by provider attestation</span>
-                </div>
-                <div className="k">verifier</div>
-                <div className="v">
-                  <code>broker.inference.processResponse</code>
-                </div>
-                <div className="k">trade-off</div>
-                <div className="v muted">
-                  smaller model, slower first call (~10s broker init), every receipt has{" "}
-                  <span className="acc">isValid</span>
-                </div>
-              </div>
-            )}
           </div>
 
-          <div className="work-section">
-            <h3>
-              04 · runtime tier{" "}
-              <span className="acc" style={{ float: "right", fontSize: 10, letterSpacing: "0.2em" }}>
-                {runtimeTier.toUpperCase()}
-              </span>
-            </h3>
-            <div className="pay-grid" style={{ marginBottom: 8 }}>
-              {RUNTIME_TIERS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={`pay-card ${runtimeTier === t.id ? "on" : ""}`}
-                  onClick={() => setRuntimeTier(t.id)}
-                >
-                  <div className="h">
-                    <span className="t">{t.label}</span>
-                    <span className="badge">{t.badge ?? (runtimeTier === t.id ? "selected" : "click")}</span>
-                  </div>
-                  <div className="body">{t.blurb}</div>
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--mute)" }}>
-              {runtimeTier === "openai-compat"
-                ? "single-shot. no tools. simplest, fastest. just system prompt + model."
-                : runtimeTier === "tools-lite"
-                  ? "operator runs an agent loop with this template's tool whitelist. fresh memory each call. recommended."
-                  : "full hermes — persistent memory across calls. experimental for permissionless mints (the runtime materializes your manifest's patterns/skills as a real bundle)."}
-            </div>
-          </div>
-
-          <div className="nav-btns">
-            <span className="why">
-              {!isConnected
-                ? "connect wallet to mint"
-                : !onZg
-                  ? `wallet on chain ${chainId} · switch to 0g galileo (${ZG_CHAIN_ID})`
-                  : pinning
-                    ? "pinning manifest to 0g storage…"
-                    : pinError
-                      ? `pin failed: ${pinError.slice(0, 80)}`
-                      : txPending
-                        ? `mining tx ${txHash ? shortish(txHash) : ""}`
-                        : mintedTokenId
-                          ? `minted #${mintedTokenId}${registered ? " · registered" : registerError ? " · register failed" : " · registering…"}`
-                          : "pin manifest → mint iNFT on 0g galileo → register with operator · <30s"}
+          {/* Collapsed editors — system prompt + skills */}
+          <button
+            type="button"
+            className="panel"
+            onClick={() => setShowSystemPromptEditor((v) => !v)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", cursor: "pointer", textAlign: "left", color: "inherit", fontFamily: "inherit", fontSize: "inherit", border: "1px solid var(--hair)" }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "var(--mute)" }}>{showSystemPromptEditor ? "▾" : "▸"}</span>
+              <span style={{ color: "var(--fg-2)" }}>system prompt editor</span>
+              <span className="pill solid">template default · {systemPrompt.length} chars</span>
             </span>
-            <div style={{ display: "flex", gap: 10 }}>
-              {!isConnected ? (
-                <button className="btn" disabled>connect first</button>
-              ) : !onZg ? (
-                <button className="btn" onClick={() => switchChain({ chainId: ZG_CHAIN_ID })}>
-                  switch to 0g galileo
-                </button>
-              ) : (
+            <span className="mono-h">{showSystemPromptEditor ? "collapse" : "expand"}</span>
+          </button>
+          {showSystemPromptEditor ? (
+            <textarea
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              spellCheck={false}
+              className="req"
+              style={{ minHeight: 180 }}
+            />
+          ) : null}
+
+          <button
+            type="button"
+            className="panel"
+            onClick={() => setShowSkillsEditor((v) => !v)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", cursor: "pointer", textAlign: "left", color: "inherit", fontFamily: "inherit", fontSize: "inherit", border: "1px solid var(--hair)" }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "var(--mute)" }}>{showSkillsEditor ? "▾" : "▸"}</span>
+              <span style={{ color: "var(--fg-2)" }}>skills · bundled into manifest</span>
+              <span className="pill solid">{skillCount} skill{skillCount === 1 ? "" : "s"}</span>
+            </span>
+            <span className="mono-h">{showSkillsEditor ? "collapse" : "expand"}</span>
+          </button>
+          {showSkillsEditor ? (
+            <div style={{ display: "grid", gap: 10 }}>
+              {customSkills.map((sk, i) => (
+                <div key={i} style={{ border: "1px solid var(--hair-2)", padding: 10, borderRadius: 2 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                    <input
+                      value={sk.name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setCustomSkills((arr) => arr.map((s, j) => (j === i ? { ...s, name: v } : s)));
+                      }}
+                      placeholder="skill-name"
+                      style={{ flex: 1, background: "#0a0a0a", border: "1px solid var(--hair)", padding: "6px 10px", color: "var(--fg)", fontSize: 14, borderRadius: 2, fontFamily: "inherit" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCustomSkills((arr) => arr.filter((_, j) => j !== i))}
+                      style={{ border: "1px solid rgba(239,68,68,0.4)", color: "var(--red)", padding: "2px 8px", borderRadius: 2, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <textarea
+                    value={sk.body}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCustomSkills((arr) => arr.map((s, j) => (j === i ? { ...s, body: v } : s)));
+                    }}
+                    spellCheck={false}
+                    className="req"
+                    style={{ minHeight: 100, fontSize: 13 }}
+                  />
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 8 }}>
                 <button
-                  className="btn primary"
-                  onClick={mint}
-                  disabled={pinning || txPending || Boolean(mintedTokenId)}
+                  type="button"
+                  className="btn"
+                  onClick={() => setCustomSkills((arr) => [...arr, { name: "", body: "" }])}
                 >
-                  {pinning
-                    ? "pinning…"
-                    : txPending
-                      ? "minting…"
-                      : mintedTokenId
-                        ? "minted ✓"
-                        : "pin · mint · register →"}
+                  + add skill
                 </button>
-              )}
-            </div>
-          </div>
-          {errorMsg ? (
-            <div style={{ padding: "10px 20px", color: "var(--red)", fontSize: 12, borderTop: "1px solid var(--hair-2)" }}>
-              {errorMsg}
-            </div>
-          ) : null}
-          {registerError ? (
-            <div style={{ padding: "10px 20px", color: "var(--amber)", fontSize: 12, borderTop: "1px solid var(--hair-2)" }}>
-              register failed: {registerError} — iNFT was minted, you can manually register later.
-            </div>
-          ) : null}
-          {pinError ? (
-            <div style={{ padding: "10px 20px", color: "var(--red)", fontSize: 12, borderTop: "1px solid var(--hair-2)" }}>
-              0g storage pin failed: {pinError}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setCustomSkills(
+                    (currentTemplate.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
+                  )}
+                >
+                  reset to template default
+                </button>
+              </div>
             </div>
           ) : null}
         </div>
 
-        <div className="work-r">
-          <div className="seal-stage">
-            <h3>what gets minted · the iNFT story end-to-end</h3>
-            <div className="seal-anim" style={{ minHeight: 0 }}>
-              <pre style={{ margin: 0, fontFamily: "inherit", fontSize: 12, lineHeight: 1.45, color: "var(--fg-2)" }}>
-{`  ┌─ on 0g storage ─────────────────────┐
-  │ manifest.json · ${truncFit(currentTemplate.id, 20)}│
-  │   tools     · ${truncFit(currentTemplate.tools.join(","), 22)}│
-  │   patterns  · ${(currentTemplate.patterns?.length ?? 0).toString().padEnd(22)}│
-  │   skills    · ${(currentTemplate.skills?.length ?? 0).toString().padEnd(22)}│
-  │   rootHash  · ${truncFit(pinResult ? pinResult.rootHash : (previewManifestHash ?? "(preview after wallet connect)").replace(/^0x/, ""), 22)}│
-  │                                     │
-  ├─ on chain · 0g galileo ─────────────┤
-  │ erc-7857 inft                       │
-  │   metadataHash · keccak(manifest)   │
-  │   metadataURI  · 0g-storage://…     │
-  │                                     │
-  ├─ operator registry · post-mint ─────┤
-  │   tokenId   · ${mintedTokenId ? `#${mintedTokenId}`.padEnd(22) : "(after mint)           "}│
-  │   tier      · ${truncFit(runtimeTier, 22)}│
-  │   backend   · ${truncFit(backend, 22)}│
-  │   perCall   · $${perCall.padEnd(21)}│
-  │                                     │
-  │ live at /x402/infer immediately     │
-  └─────────────────────────────────────┘`}
-              </pre>
+        {/* RIGHT — live manifest preview */}
+        <div className="panel" style={{ alignSelf: "stretch", display: "flex", flexDirection: "column" }}>
+          <div className="panel-h">
+            <span className="t">manifest · live preview</span>
+            <span className="pill green">building</span>
+          </div>
+          <pre className="ascii" style={{ margin: 0, padding: "14px 16px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre" }}>
+{`┌─ agent.manifest ─────────────────┐
+│  ticker     ${truncFit((ticker || "—").toUpperCase() + ".slopstock.eth", 22).padEnd(22)}│
+│  template   ${truncFit(currentTemplate.id, 22).padEnd(22)}│
+│  price      ${truncFit("$" + (perCall || "0.00") + " USDC / call", 22).padEnd(22)}│
+│  runtime    ${truncFit(runtimeTier, 22).padEnd(22)}│
+│  backend    ${truncFit(backend === "0g-compute" ? "0g · intel tdx" : "venice", 22).padEnd(22)}│
+├─ tools (${currentTemplate.tools.length}) ──────────────────────┤`}
+{"\n"}
+{currentTemplate.tools.map((t) => `│  ▸ ${t.padEnd(30)}│`).join("\n")}
+{"\n"}
+{`├─ skills (${skillCount}) ──────────────────────┤`}
+{"\n"}
+{skillCount === 0
+  ? "│  (none yet · template default replaced)│"
+  : customSkills
+      .filter((s) => s.name.trim() && s.body.trim())
+      .slice(0, 6)
+      .map((s) => `│  • ${truncFit(s.name, 32).padEnd(32)}│`)
+      .join("\n")}
+{"\n"}
+{`├─ artifacts ──────────────────────┤
+│  manifest hash    ${previewManifestHash ? truncFit(previewManifestHash.replace(/^0x/, ""), 14).padEnd(14) : "(at mint time)"}│
+│  inft tokenid     ${"(at mint time)".padEnd(14)}│
+│  ens record       reserved       │
+└──────────────────────────────────┘`}
+          </pre>
+          <div style={{ borderTop: "1px solid var(--hair)", padding: "10px 14px", fontSize: 13, color: "var(--mute)", display: "flex", justifyContent: "space-between" }}>
+            <span>live · recomputes on every keystroke</span>
+            <span><span style={{ color: "var(--accent)" }}>●</span> manifest valid</span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 13, color: "var(--mute)" }}>
+          changes auto-saved to local draft · hash recomputes on every edit
+        </span>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button className="btn" onClick={onBack}>← back</button>
+          <button
+            className="btn primary"
+            onClick={onContinue}
+            disabled={!tickerOk || !description.trim() || !perCall.trim()}
+          >
+            review + mint →
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ───────────── Step 3 · review + mint ───────────── */
+
+function ReviewStep(props: {
+  ticker: string;
+  perCall: string;
+  currentTemplate: CapabilityTemplate;
+  runtimeTier: RuntimeTier;
+  backend: "openai-compat" | "0g-compute";
+  previewManifestHash: string | null;
+  pinResult: { rootHash: string; uri: string; size: number } | null;
+  isConnected: boolean;
+  onZg: boolean;
+  chainId: number;
+  switchChainTo: (id: number) => void;
+  mint: () => void;
+  pinning: boolean;
+  txPending: boolean;
+  mintedTokenId: string | null;
+  txHash: Hex | null;
+  errorMsg: string | null;
+  pinError: string | null;
+  registerError: string | null;
+  onBack: () => void;
+}) {
+  const {
+    ticker, perCall, currentTemplate, runtimeTier, backend, previewManifestHash,
+    pinResult, isConnected, onZg, chainId, switchChainTo, mint, pinning, txPending,
+    mintedTokenId, txHash, errorMsg, pinError, registerError, onBack,
+  } = props;
+
+  const subSteps: Array<{ t: string; sub: string; st: "ready" | "queued" | "ok" | "live" }> =
+    !isConnected || !onZg
+      ? [
+          { t: "sign manifest", sub: "wallet popup", st: "queued" },
+          { t: "pin to 0g storage", sub: "ipfs cid + replicas", st: "queued" },
+          { t: "mint inft on 0g", sub: "erc-7857 + meta key", st: "queued" },
+          { t: "register x402", sub: "subname → tokenid", st: "queued" },
+        ]
+      : pinning
+        ? [
+            { t: "sign manifest", sub: "wallet popup", st: "ok" },
+            { t: "pin to 0g storage", sub: "ipfs cid + replicas", st: "live" },
+            { t: "mint inft on 0g", sub: "erc-7857 + meta key", st: "queued" },
+            { t: "register x402", sub: "subname → tokenid", st: "queued" },
+          ]
+        : txPending
+          ? [
+              { t: "sign manifest", sub: "wallet popup", st: "ok" },
+              { t: "pin to 0g storage", sub: "ipfs cid + replicas", st: "ok" },
+              { t: "mint inft on 0g", sub: "erc-7857 + meta key", st: "live" },
+              { t: "register x402", sub: "subname → tokenid", st: "queued" },
+            ]
+          : mintedTokenId
+            ? [
+                { t: "sign manifest", sub: "wallet popup", st: "ok" },
+                { t: "pin to 0g storage", sub: "ipfs cid + replicas", st: "ok" },
+                { t: "mint inft on 0g", sub: "erc-7857 + meta key", st: "ok" },
+                { t: "register x402", sub: "subname → tokenid", st: "live" },
+              ]
+            : [
+                { t: "sign manifest", sub: "wallet popup", st: "ready" },
+                { t: "pin to 0g storage", sub: "ipfs cid + replicas", st: "queued" },
+                { t: "mint inft on 0g", sub: "erc-7857 + meta key", st: "queued" },
+                { t: "register x402", sub: "subname → tokenid", st: "queued" },
+              ];
+
+  return (
+    <section style={{ display: "grid", gridTemplateRows: "auto 1fr auto", rowGap: 22 }}>
+      <div>
+        <h1 style={{ fontSize: 30, fontWeight: 600, margin: "0 0 4px", letterSpacing: "-0.01em" }}>
+          final review
+        </h1>
+        <div style={{ fontSize: 15, color: "var(--fg-2)" }}>
+          once minted, ticker + manifest hash are immutable. pricing + prompt remain owner-editable.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, alignItems: "start" }}>
+        {/* LEFT — full kv */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="panel">
+            <div className="panel-h">
+              <span className="t">agent</span>
+              <span className="pill green">manifest valid</span>
             </div>
-            {pinResult ? (
-              <div className="kv" style={{ marginTop: 10, border: "1px solid rgba(16,185,129,0.35)", background: "rgba(16,185,129,0.04)" }}>
-                <div className="k">manifest pinned</div>
-                <div className="v acc">{shortish(pinResult.rootHash)}</div>
-                <div className="k">size</div>
-                <div className="v">{pinResult.size.toLocaleString()} bytes</div>
-                <div className="k">uri</div>
-                <div className="v">{pinResult.uri}</div>
-              </div>
-            ) : null}
+            <div className="kv" style={{ padding: "10px 0" }}>
+              <div className="k">ticker</div><div className="v"><b style={{ letterSpacing: "0.04em" }}>{ticker.toUpperCase()}.slopstock.eth</b></div>
+              <div className="k">template</div><div className="v">{currentTemplate.label}</div>
+              <div className="k">price</div><div className="v" style={{ color: "var(--accent)" }}>${perCall} USDC</div>
+              <div className="k">protocol fee</div><div className="v">5% · ${(Number(perCall) * 0.05).toFixed(2)} / call</div>
+              <div className="k">runtime</div><div className="v">{runtimeTier}</div>
+              <div className="k">compute</div><div className="v">{backend === "0g-compute" ? "0G compute · intel tdx" : "venice · hosted"}</div>
+              <div className="k">tools</div><div className="v">{currentTemplate.tools.join(", ")}</div>
+            </div>
           </div>
 
-          {mintedTokenId && registered ? (
-            <div className="attest-receipt" style={{ display: "block" }}>
-              <div className="head">
-                <span className="t">live · permissionless agent registered</span>
-                <span className="muted" style={{ fontSize: 10 }}>0g galileo · operator</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div className="panel">
+              <div className="panel-h">
+                <span className="t">manifest hash</span>
+                <span className="pill solid">keccak256</span>
               </div>
-              <h2>your agent is serving.</h2>
-              <div className="body">
-                tokenId <b className="acc">#{mintedTokenId}</b> minted to your wallet AND registered
-                with the operator. the system prompt + model are now live behind x402. test it below
-                without paying — direct runtime call, same path the paid x402 endpoint uses.
+              <div style={{ padding: 14, fontSize: 13, color: "var(--fg-2)", wordBreak: "break-all", lineHeight: 1.6 }}>
+                {previewManifestHash ? `0x${previewManifestHash.replace(/^0x/, "")}` : "(connect wallet to compute)"}
               </div>
+            </div>
+            <div className="panel">
+              <div className="panel-h">
+                <span className="t">manifest cid</span>
+                <span className="pill solid">0g storage</span>
+              </div>
+              <div style={{ padding: 14, fontSize: 13, color: "var(--fg-2)", wordBreak: "break-all", lineHeight: 1.6 }}>
+                {pinResult ? pinResult.uri : "(pinned at mint)"}
+              </div>
+            </div>
+          </div>
+        </div>
 
-              <div className="grid">
-                <div className="c">
-                  <div className="l">tokenId</div>
-                  <div className="v acc">#{mintedTokenId}</div>
-                </div>
-                <div className="c">
-                  <div className="l">tx hash</div>
-                  <div className="v">{txHash ? shortish(txHash) : "—"}</div>
-                </div>
-                <div className="c">
-                  <div className="l">explorer</div>
-                  <div className="v">
-                    {txHash ? (
-                      <a className="acc" href={`https://chainscan-galileo.0g.ai/tx/${txHash}`} target="_blank" rel="noreferrer">
-                        chainscan ↗
-                      </a>
-                    ) : "—"}
-                  </div>
-                </div>
-                <div className="c">
-                  <div className="l">operator</div>
-                  <div className="v acc">/agents/{mintedTokenId}</div>
-                </div>
-              </div>
+        {/* RIGHT — multichain ASCII map */}
+        <div className="panel" style={{ alignSelf: "stretch", display: "flex", flexDirection: "column" }}>
+          <div className="panel-h">
+            <span className="t">what gets created · 4 chains, 1 tx campaign</span>
+            <span className="mono-h">~14s end-to-end</span>
+          </div>
+          <pre className="ascii" style={{ margin: 0, padding: "18px 22px", fontSize: 13, lineHeight: 1.55 }}>
+{`             ╔═══════════════════════════════╗
+             ║   `}<span className="f">0G GALILEO  ·  iNFT</span>{`        ║
+             ║   ┌────────────────────┐      ║
+             ║   │  ERC-7857 #pending │      ║
+             ║   │  manifest hash on  │      ║
+             ║   │  chain · sealed    │      ║
+             ║   └─────────┬──────────┘      ║
+             ╚═════════════│═════════════════╝
+                           │
+        ┌──────────────────┼──────────────────┐
+        ▼                  ▼                  ▼
+  ╔═════════════╗   ╔═════════════╗    ╔═════════════╗
+  ║ `}<span className="f">SHARE TOKEN</span>{` ║   ║ `}<span className="f">REVENUE VLT</span>{` ║    ║   `}<span className="f">IPO SALE</span>{`  ║
+  ║   erc-20    ║   ║  per-snap   ║    ║  fixed price║
+  ║  ${truncFit(ticker.toUpperCase(), 11).padEnd(11)}║   ║  pull pay   ║    ║  $${truncFit(perCall, 6).padEnd(6)}/sh ║
+  ║  supply 1M  ║   ║  usdc claim ║    ║  cap 1.0M   ║
+  ╚══════╤══════╝   ╚══════╤══════╝    ╚══════╤══════╝
+         └─────────────────┼──────────────────┘
+                           │
+              ╔════════════▼═════════════╗
+              ║   `}<span className="f">BASE SEPOLIA</span>{`           ║
+              ║   chain-id  84532        ║
+              ║   tx campaign 3 deploys  ║
+              ╚══════════════════════════╝
+   `}<span className="d">─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</span>{`
+   `}<span className="m">manifest pin →</span>{` ╔══════════════════════════╗
+                  ║   `}<span className="f">0G STORAGE</span>{`             ║
+                  ║   keccak-content-addr   ║
+                  ║   replicas 3 · ttl ∞    ║
+                  ╚══════════════════════════╝`}
+          </pre>
+        </div>
+      </div>
 
-              <div className="out" style={{ marginTop: 14 }}>
-                <h4>test inference · no payment required</h4>
+      <div>
+        {!isConnected ? (
+          <button className="mint-btn" disabled>
+            connect wallet to mint <span className="ar">→</span>
+          </button>
+        ) : !onZg ? (
+          <button className="mint-btn busy" onClick={() => switchChainTo(ZG_CHAIN_ID)}>
+            switch to 0g galileo · chain {ZG_CHAIN_ID} <span className="ar">→</span>
+          </button>
+        ) : (
+          <button
+            className={"mint-btn" + (pinning || txPending ? " busy" : "")}
+            onClick={mint}
+            disabled={pinning || txPending || Boolean(mintedTokenId)}
+          >
+            {pinning
+              ? "pinning manifest to 0G Storage…"
+              : txPending
+                ? `minting iNFT on 0G Galileo · tx ${txHash ? shortish(txHash) : "…"}`
+                : mintedTokenId
+                  ? `minted #${mintedTokenId} ✓`
+                  : `mint ${ticker.toUpperCase()}.slopstock.eth`}
+            {!pinning && !txPending && !mintedTokenId ? <span className="ar">→</span> : null}
+          </button>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 0, marginTop: 10 }}>
+          {subSteps.map((s, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "10px 14px",
+                borderRight: i < 3 ? "1px solid var(--hair)" : "none",
+                borderBottom: "1px solid var(--hair)",
+                borderLeft: i === 0 ? "1px solid var(--hair)" : "none",
+                borderTop: "1px solid var(--hair)",
+              }}
+            >
+              <span className="n" style={{ color: "var(--mute)", fontSize: 13 }}>
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 14, color: "var(--fg)" }}>{s.t}</div>
+                <div style={{ fontSize: 12, color: "var(--mute)", letterSpacing: "0.06em" }}>{s.sub}</div>
+              </div>
+              <span
+                className={
+                  "pill " +
+                  (s.st === "ok" ? "green" : s.st === "live" ? "amber" : s.st === "ready" ? "green" : "solid")
+                }
+              >
+                {s.st}
+              </span>
+            </div>
+          ))}
+        </div>
+        {(errorMsg || pinError || registerError) ? (
+          <div style={{ marginTop: 10, color: "var(--red)", fontSize: 13 }}>
+            {errorMsg || pinError || registerError}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 13, color: "var(--mute)" }}>
+          chain {chainId} {onZg ? "· ready" : "· wrong network"}
+        </span>
+        <button className="btn" onClick={onBack}>← back to identity</button>
+      </div>
+    </section>
+  );
+}
+
+/* ───────────── Step 4 · go live ───────────── */
+
+function LiveStep(props: {
+  ticker: string;
+  mintedTokenId: string | null;
+  registered: boolean;
+  txHash: Hex | null;
+  testInput: string;
+  setTestInput: (v: string) => void;
+  runTest: () => void;
+  testRunning: boolean;
+  testOutput: string | null;
+  finance: { shareToken: string; revenueVault: string; ipoSale: string; txHashes: { shareToken: string; revenueVault: string; ipoSale: string } } | null;
+  deployFinance: () => void;
+  financeDeploying: boolean;
+  financeError: string | null;
+  approveShares: () => void;
+  approving: boolean;
+  approveError: string | null;
+  approved: boolean;
+  chainId: number;
+  ZG_TEE_PROVIDER: string;
+  ZG_TEE_NETWORK: string;
+}) {
+  const {
+    ticker, mintedTokenId, registered, txHash, testInput, setTestInput, runTest,
+    testRunning, testOutput, finance, deployFinance, financeDeploying, financeError,
+    approveShares, approving, approveError, approved, chainId, ZG_TEE_PROVIDER, ZG_TEE_NETWORK,
+  } = props;
+
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* hero strip */}
+      <div className="panel" style={{ padding: "20px 24px", display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", columnGap: 24 }}>
+        <div>
+          <div style={{ fontSize: 13, letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--accent)" }}>
+            ▌ {registered ? "minted · live" : "minted · registering…"}
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 600, color: "var(--fg)", marginTop: 4, letterSpacing: "-0.02em" }}>
+            your agent is live<span style={{ color: "var(--accent)" }}>.</span>
+            <span className="blink" style={{ color: "var(--accent)" }}>▌</span>
+          </div>
+        </div>
+        <div className="ss-hero-stats" style={{ marginLeft: 24 }}>
+          <div className="ss-stat">
+            <div className="lab">ticker</div>
+            <div className="val" style={{ fontSize: 19 }}>
+              {ticker.toUpperCase()}<span style={{ color: "var(--mute)" }}>.slopstock.eth</span>
+            </div>
+          </div>
+          <div className="ss-stat">
+            <div className="lab">tokenid</div>
+            <div className="val n" style={{ fontSize: 19 }}>#{mintedTokenId ?? "…"}</div>
+          </div>
+          <div className="ss-stat">
+            <div className="lab">tx hash · 0g galileo</div>
+            <div className="val" style={{ fontSize: 15 }}>
+              {txHash ? (
+                <a
+                  className="hash-link"
+                  href={`https://chainscan-galileo.0g.ai/tx/${txHash}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {shortish(txHash)} ↗
+                </a>
+              ) : "—"}
+            </div>
+          </div>
+          <div className="ss-stat">
+            <div className="lab">x402 endpoint</div>
+            <div className="val" style={{ fontSize: 15 }}>/x402/infer · #{mintedTokenId}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+          <span className="pill green">tee sealed</span>
+          <span className="pill solid">erc-7857</span>
+          <span className="pill solid">ens reserved</span>
+        </div>
+      </div>
+
+      {/* test pad + response/attestation */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <div className="panel" style={{ display: "flex", flexDirection: "column" }}>
+          <div className="panel-h">
+            <span className="t">free test inference · no payment</span>
+            <span className="pill amber">trial</span>
+          </div>
+          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+            <div className="ss-field">
+              <label>prompt</label>
+              <div className="inp focus" style={{ height: "auto", minHeight: 120, alignItems: "flex-start", padding: "12px 14px", lineHeight: 1.6, fontSize: 15 }}>
                 <textarea
-                  className="req"
-                  style={{ minHeight: 60 }}
                   value={testInput}
                   onChange={(e) => setTestInput(e.target.value)}
-                  placeholder="ask your new agent something…"
+                  spellCheck={false}
+                  style={{ width: "100%", minHeight: 96, background: "transparent", border: 0, outline: 0, font: "inherit", color: "inherit", resize: "vertical" }}
                 />
-                <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center" }}>
-                  <button className="btn primary" onClick={runTest} disabled={testRunning || !testInput.trim()}>
-                    {testRunning ? "running…" : "run inference →"}
-                  </button>
-                  <span className="muted" style={{ fontSize: 11 }}>
-                    bypasses x402 — goes straight to your agent&apos;s runtime
-                  </span>
-                </div>
-                {testOutput ? (
-                  <pre style={{ marginTop: 12, padding: 10, background: "#0a0a0a", border: "1px solid var(--hair-2)", color: "var(--fg-2)", fontSize: 12, overflow: "auto", whiteSpace: "pre-wrap" }}>
-                    {testOutput}
-                  </pre>
-                ) : null}
               </div>
-
-              {/* Finance deploy — operator deploys ShareToken + Vault + IPO on Base */}
-              <div className="out" style={{ marginTop: 14 }}>
-                <h4>fractional shares · deploy on base sepolia</h4>
-                {finance ? (
-                  <div className="kv" style={{ marginTop: 6 }}>
-                    <div className="k">share token</div>
-                    <div className="v acc">
-                      <a href={`https://sepolia.basescan.org/address/${finance.shareToken}`} target="_blank" rel="noreferrer">
-                        {shortish(finance.shareToken)} ↗
-                      </a>
-                    </div>
-                    <div className="k">revenue vault</div>
-                    <div className="v acc">
-                      <a href={`https://sepolia.basescan.org/address/${finance.revenueVault}`} target="_blank" rel="noreferrer">
-                        {shortish(finance.revenueVault)} ↗
-                      </a>
-                    </div>
-                    <div className="k">ipo sale</div>
-                    <div className="v acc">
-                      <a href={`https://sepolia.basescan.org/address/${finance.ipoSale}`} target="_blank" rel="noreferrer">
-                        {shortish(finance.ipoSale)} ↗
-                      </a>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ fontSize: 12, color: "var(--fg-2)", marginBottom: 8 }}>
-                      one click → operator deploys ShareToken (1M supply to you), RevenueVault, and IPOSale on Base Sepolia. After this your agent has a live cap table + primary issuance.
-                    </div>
-                    <button
-                      className="btn primary"
-                      onClick={deployFinance}
-                      disabled={financeDeploying}
-                    >
-                      {financeDeploying ? "deploying 3 contracts on base…" : "deploy fractional shares →"}
-                    </button>
-                    {financeError ? (
-                      <div style={{ marginTop: 8, color: "var(--red)", fontSize: 12 }}>{financeError}</div>
-                    ) : null}
-                  </>
-                )}
+              <div className="help" style={{ display: "flex", justifyContent: "space-between" }}>
+                <span><span className="n">{testInput.length}</span> chars · runs the same path as a paid x402 call</span>
+                <span>{registered ? "ready" : "registering…"}</span>
               </div>
             </div>
-          ) : null}
+            <button
+              className={"mint-btn" + (testRunning ? " busy" : "")}
+              onClick={runTest}
+              disabled={testRunning || !testInput.trim() || !registered}
+            >
+              {testRunning ? "running…" : "run free test"}
+              {!testRunning ? <span className="ar">→</span> : null}
+            </button>
+          </div>
         </div>
-      </section>
 
-      <div className="section-h">
-        <h2>your agent is live · everything below is real</h2>
-        <span className="sub">no mocks · no placeholders</span>
-      </div>
-      <div className="ds-grid cols-3" style={{ gap: "var(--gap)" }}>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="lhs"><span>onchain</span></div>
-            <div className="rhs"><span className="pill ok">0g galileo</span></div>
+        <div className="panel" style={{ display: "flex", flexDirection: "column" }}>
+          <div className="panel-h">
+            <span className="t">response · stream</span>
+            <span className="pill green">{testOutput ? "complete" : testRunning ? "live" : "idle"}</span>
           </div>
-          <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>erc-7857 iNFT minted to your wallet</li>
-            <li>metadata hash + sealed-key pinned on chain</li>
-            <li>permissionless: anyone can list — no allowlist</li>
-            <li>your tokenId is uniquely yours · transferable</li>
-          </ul>
-        </div>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="lhs"><span>operator</span></div>
-            <div className="rhs"><span className="pill ok">live</span></div>
+          <div style={{ padding: 14, fontSize: 14, color: "var(--fg)", lineHeight: 1.65, minHeight: 220 }}>
+            {testOutput ? (
+              <InferenceOutput raw={testOutput} />
+            ) : testRunning ? (
+              <span style={{ color: "var(--mute)" }}>
+                dispatching to enclave… signature recovers when the response lands.
+              </span>
+            ) : (
+              <span style={{ color: "var(--mute)" }}>
+                response will appear here. signature recovered against{" "}
+                <span style={{ color: "var(--fg-2)" }}>{shortish(ZG_TEE_PROVIDER)}</span>{" "}
+                ({ZG_TEE_NETWORK}).
+              </span>
+            )}
           </div>
-          <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>your system prompt is the agent identity</li>
-            <li>routed to your chosen Venice model</li>
-            <li>test inference above hits the same runtime as paid calls</li>
-            <li>responds with TEE-attested receipt at /x402/infer</li>
-          </ul>
-        </div>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="lhs"><span>economy</span></div>
-            <div className="rhs"><span className="pill ok">x402</span></div>
-          </div>
-          <ul style={{ padding: "12px 18px 14px 32px", margin: 0, color: "var(--fg-2)", fontSize: 12 }}>
-            <li>x402 paywall live — your price, your USDC</li>
-            <li>each call returns a signed receipt</li>
-            <li>other agents can pay yours (a→a economy)</li>
-            <li>vault wiring + share-token IPO ship next deploy</li>
-          </ul>
         </div>
       </div>
-    </>
+
+      {/* fractionalize / approve / open ipo */}
+      <div className="panel">
+        <div className="panel-h">
+          <span className="t">fractionalize · open the IPO</span>
+          {finance ? (
+            approved ? (
+              <span className="pill green">ipo open</span>
+            ) : (
+              <span className="pill amber">awaiting approve</span>
+            )
+          ) : financeError ? (
+            <span className="pill amber">deploy failed</span>
+          ) : financeDeploying ? (
+            <span className="pill amber">deploying · auto</span>
+          ) : (
+            <span className="pill solid">queued</span>
+          )}
+        </div>
+        <div style={{ padding: 18 }}>
+          {!finance ? (
+            <>
+              <div style={{ fontSize: 14, color: "var(--fg-2)", marginBottom: 14 }}>
+                Operator is deploying <b className="acc">ShareToken</b> (1M supply minted to you),{" "}
+                <b className="acc">RevenueVault</b>, and <b className="acc">IPOSale</b> on Base Sepolia
+                — kicked off in parallel with your iNFT mint. No click needed; addresses appear here
+                when the 3 deploys land.
+              </div>
+              <button
+                className={"mint-btn" + (financeDeploying ? " busy" : "")}
+                onClick={deployFinance}
+                disabled={financeDeploying || !registered}
+              >
+                {financeDeploying
+                  ? "deploying 3 contracts on base sepolia…"
+                  : financeError
+                    ? "retry deploy"
+                    : !registered
+                      ? "registering agent…"
+                      : "deploy fractional shares"}
+                {!financeDeploying ? <span className="ar">→</span> : null}
+              </button>
+              {financeError ? <div style={{ marginTop: 8, color: "var(--red)", fontSize: 13 }}>{financeError}</div> : null}
+            </>
+          ) : (
+            <>
+              <div className="kv" style={{ padding: "0 0 14px" }}>
+                <div className="k">share token</div>
+                <div className="v">
+                  <a className="hash-link" href={`https://sepolia.basescan.org/address/${finance.shareToken}`} target="_blank" rel="noreferrer">
+                    {shortish(finance.shareToken)} ↗
+                  </a>
+                </div>
+                <div className="k">revenue vault</div>
+                <div className="v">
+                  <a className="hash-link" href={`https://sepolia.basescan.org/address/${finance.revenueVault}`} target="_blank" rel="noreferrer">
+                    {shortish(finance.revenueVault)} ↗
+                  </a>
+                </div>
+                <div className="k">ipo sale</div>
+                <div className="v">
+                  <a className="hash-link" href={`https://sepolia.basescan.org/address/${finance.ipoSale}`} target="_blank" rel="noreferrer">
+                    {shortish(finance.ipoSale)} ↗
+                  </a>
+                </div>
+              </div>
+
+              {!approved ? (
+                <>
+                  <div style={{ fontSize: 14, color: "var(--fg-2)", marginBottom: 10 }}>
+                    <b className="acc">step 2 · approve shares</b> — IPOSale needs permission to pull
+                    shares from your wallet when buyers fill orders. one click, one signature.
+                  </div>
+                  <button
+                    className={"mint-btn" + (approving ? " busy" : "")}
+                    onClick={approveShares}
+                    disabled={approving}
+                  >
+                    {approving
+                      ? chainId !== BASE_CHAIN_ID
+                        ? "switching to base…"
+                        : "approving on base…"
+                      : "approve shares · open ipo"}
+                    {!approving ? <span className="ar">→</span> : null}
+                  </button>
+                  {approveError ? <div style={{ marginTop: 8, color: "var(--red)", fontSize: 13 }}>{approveError}</div> : null}
+                </>
+              ) : (
+                <div
+                  style={{
+                    padding: "14px 16px",
+                    border: "1px solid rgba(16,185,129,0.35)",
+                    background: "rgba(16,185,129,0.05)",
+                    borderRadius: 2,
+                  }}
+                >
+                  <div style={{ marginBottom: 4 }}>
+                    <span className="acc" style={{ fontWeight: 600 }}>✓ ipo open</span>
+                    {" · "}IPOSale can now fill share orders against your treasury.
+                  </div>
+                  <Link className="acc" href={`/agent/${ticker.toUpperCase()}/acquire`}>
+                    open the cap table → /agent/{ticker.toUpperCase()}/acquire
+                  </Link>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <label style={{ display: "block" }}>
-      <div className="up">{label}</div>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        spellCheck={false}
-        style={{
-          marginTop: 6,
-          width: "100%",
-          background: "#0a0a0a",
-          border: "1px solid var(--hair)",
-          color: "var(--fg)",
-          padding: "10px 12px",
-          fontFamily: "inherit",
-          fontSize: 13,
-          borderRadius: 2,
-          outline: "none",
-        }}
-      />
-    </label>
-  );
-}
+/* ───────────── helpers ───────────── */
 
 function shortish(s: string, chars = 8): string {
   if (!s.startsWith("0x")) return s;
@@ -918,6 +1381,105 @@ function shortish(s: string, chars = 8): string {
 }
 
 function truncFit(s: string, w: number): string {
-  if (s.length <= w) return s.padEnd(w);
-  return s.slice(0, w - 1) + "…";
+  if (s.length <= w) return s;
+  return s.slice(0, Math.max(0, w - 1)) + "…";
+}
+
+/**
+ * fetch + JSON with bounded retries on transient transport failures.
+ *
+ * The browser surfaces *anything* that prevents a response — DNS blip, CORS
+ * preflight cancel, edge proxy cold-start, mid-flight TCP reset — as a
+ * generic "Failed to fetch" TypeError. Retrying on those is safe; HTTP-level
+ * errors (4xx/5xx) come back as a real Response and are NOT retried unless
+ * they are 502/503/504 (gateway transient). 5 attempts, exponential backoff
+ * starting at 600 ms (so total wait ≤ 10s before giving up).
+ */
+async function fetchJsonWithRetry(
+  url: string,
+  init: RequestInit,
+  opts: { retries?: number; baseDelayMs?: number; timeoutMs?: number } = {},
+): Promise<unknown> {
+  const retries = opts.retries ?? 5;
+  const baseDelayMs = opts.baseDelayMs ?? 600;
+  const timeoutMs = opts.timeoutMs ?? 90_000;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...init, signal: ctl.signal });
+      clearTimeout(timer);
+      const txt = await res.text();
+      if (res.ok) {
+        try {
+          return txt ? JSON.parse(txt) : {};
+        } catch {
+          return txt;
+        }
+      }
+      // Retry transient gateway statuses; surface real client/server errors.
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        lastErr = new Error(`operator ${res.status}: ${txt.slice(0, 200)}`);
+      } else {
+        throw new Error(`operator ${res.status}: ${txt.slice(0, 400)}`);
+      }
+    } catch (err) {
+      clearTimeout(timer);
+      const isTransport =
+        err instanceof TypeError /* "Failed to fetch" */ ||
+        (err instanceof DOMException && err.name === "AbortError") ||
+        (err instanceof Error &&
+          (err.message.includes("Failed to fetch") ||
+            err.message.includes("NetworkError") ||
+            err.message.includes("network error")));
+      if (!isTransport) throw err;
+      lastErr = err;
+    }
+    if (attempt < retries) {
+      const delay = baseDelayMs * Math.pow(1.6, attempt);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`fetch ${url} failed after ${retries + 1} attempts`);
+}
+
+interface FinanceStatusComplete {
+  status: "complete";
+  finance: { shareToken: string; revenueVault: string; ipoSale: string };
+  txHashes?: { shareToken: string; revenueVault: string; ipoSale: string };
+}
+
+/**
+ * Polls GET /agents/:tokenId/deploy-finance until status flips to complete
+ * or error. Tolerates transient transport failures via fetchJsonWithRetry.
+ * Caps at ~10 minutes wall clock so a stuck operator can't hang the UI.
+ */
+async function pollFinanceStatus(tokenId: string): Promise<FinanceStatusComplete> {
+  const startedAt = Date.now();
+  const maxMs = 10 * 60 * 1000;
+  const url = `${OPERATOR_URL}/agents/${tokenId}/deploy-finance`;
+  // First poll fires immediately; subsequent polls back off mildly.
+  let intervalMs = 1500;
+  while (Date.now() - startedAt < maxMs) {
+    const body = (await fetchJsonWithRetry(url, { method: "GET" })) as
+      | { status: "deploying"; sinceMs?: number }
+      | { status: "idle" }
+      | FinanceStatusComplete
+      | { status: "error"; message: string }
+      | { status: "not-found" };
+    if (body && typeof body === "object" && "status" in body) {
+      if (body.status === "complete") return body;
+      if (body.status === "error") {
+        throw new Error(("message" in body ? body.message : null) ?? "deploy failed");
+      }
+      // "deploying", "idle" (server hasn't picked it up yet), or "not-found" → keep polling.
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+    intervalMs = Math.min(intervalMs + 500, 4000);
+  }
+  throw new Error("finance deploy timed out after 10 min");
 }

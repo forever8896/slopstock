@@ -6,12 +6,18 @@
  * value exactly — that's how the subscriber-side verifier proves the output
  * came from the seal pinned to *this* tokenId.
  *
- * In production we'd read from chain on operator boot and cache. For now
- * we just hardcode the values for the agents we've minted; if you redeploy,
- * update both this file and the web's agent-metadata.ts.
+ * Static seed agents (tokenIds 1-3) keep their hardcoded values for parity
+ * with the historical receipts pinned in the test data. Dynamic agents
+ * minted via /launch use their `bundleManifestCid` (= keccak(canonical manifest))
+ * — the same value that's both pinned to the iNFT's metadataHash on 0G and
+ * exposed to the web client as `realAgent.bundleManifestCid`. That keeps
+ * receipt.teeAttestation.measurement === expectedTeeMeasurement so the
+ * subscribe page's "verified" check matches instead of showing
+ * "mismatch — investigate" against an all-zeros fallback.
  */
 
 import type { Hex } from "@stratum/shared";
+import { getDynamicAgentSync } from "./dynamic-cache.ts";
 
 const TABLE: Record<string, Hex> = {
   "1": "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37", // AUDIT
@@ -22,5 +28,14 @@ const TABLE: Record<string, Hex> = {
 const FALLBACK: Hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 export function measurementForToken(tokenId: bigint): Hex {
-  return TABLE[tokenId.toString()] ?? FALLBACK;
+  const seeded = TABLE[tokenId.toString()];
+  if (seeded) return seeded;
+  const dyn = getDynamicAgentSync(tokenId);
+  if (dyn?.bundleManifestCid) {
+    const cid = dyn.bundleManifestCid.startsWith("0x")
+      ? dyn.bundleManifestCid
+      : `0x${dyn.bundleManifestCid}`;
+    return cid as Hex;
+  }
+  return FALLBACK;
 }

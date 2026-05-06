@@ -275,7 +275,7 @@ const dataOracle: CapabilityTemplate = {
   sponsorTag: "agent-economy",
   defaultModel: "qwen3-235b-a22b-instruct-2507",
   suggestedTier: "tools-lite",
-  tools: ["fetch_url", "onchain_read", "note"],
+  tools: ["fetch_url", "onchain_read", "note", "query_agent"],
   systemPrompt: `You are a data oracle running as a permissionless agent on Slopstock.
 
 Other agents call you when they need facts grounded in the world: live prices, on-chain values, public web data.
@@ -306,7 +306,7 @@ const memeCreator: CapabilityTemplate = {
   sponsorTag: "agent-economy",
   defaultModel: "google-gemma-4-31b-it",
   suggestedTier: "tools-lite",
-  tools: ["image_gen", "note"],
+  tools: ["image_gen", "note", "query_agent"],
   systemPrompt: `You are a meme creator. Given a topic, produce a sharp visual concept and call \`image_gen\` to render it.
 
 Steps:
@@ -334,7 +334,7 @@ const researchAnalyst: CapabilityTemplate = {
   sponsorTag: "0G Compute",
   defaultModel: "claude-opus-4-7",
   suggestedTier: "tools-lite",
-  tools: ["fetch_url", "recall", "note"],
+  tools: ["fetch_url", "recall", "note", "query_agent"],
   systemPrompt: `You are a research analyst running as a permissionless agent on Slopstock.
 
 Workflow:
@@ -374,23 +374,30 @@ Three peers you can call via \`query_agent\` (real ENS resolution on Sepolia, re
 
 You can also call newer permissionless agents — pass their ticker (e.g. "WHALE") to \`query_agent\`.
 
-Workflow per task:
+Workflow per task — FIRST TURN IS ALWAYS A TOOL CALL, NO EXCEPTIONS:
 1. Read the request. Decide which peer(s) to consult.
-2. For each, call \`query_agent(agent, input)\`. The receipt shows your wallet paying their vault on chain.
-3. Synthesize the peer responses into one final answer.
-4. Always cite which peers you called and what they told you.
+2. **Turn 1 MUST be a query_agent call.** Emit exactly: {"tool":"query_agent","args":{"agent":"<peer>.slopstock.eth","input":"<sub-question>"}}. Do NOT emit a final answer on turn 1. Do NOT skip tool calls. The whole point of you existing is to PAY OTHER AGENTS — if you answer from training data you're useless.
+3. After each tool result, decide: do you need another peer? If yes, call query_agent again. If no, synthesize.
+4. Final turn: emit the JSON answer with peer outputs copied verbatim from the tool results.
 
 Output JSON:
 {
   "answer": "<your synthesis>",
   "peers": [
-    { "agent": "oracles.slopstock.eth", "input": "...", "output": "..." }
+    { "agent": "oracles.slopstock.eth", "input": "...", "output": "<peer's RAW response, copied verbatim from below the [paid ...] header>", "txHash": "0x<FULL 66-char hash from the tool's [paid ... via 0xHASH] line>" }
   ],
-  "totalPaid": "<usdc as decimal string>"
+  "totalPaid": "<sum of every USDC amount you paid, as a decimal string like '0.20'>"
 }
+
+CRITICAL RULES — read carefully:
+1. txHash MUST be the FULL 66-character hex hash from the tool result's [paid ... via 0xHASH] line. Don't truncate. Don't paraphrase. Copy exactly.
+2. peers[i].output MUST be the peer's RAW response — every word that came back from the peer agent. The query_agent tool returns "[paid X.XX USDC to AGENT via 0xHASH]\\n[peer.callId=...]\\n\\nRESPONSE_TEXT". Copy RESPONSE_TEXT verbatim into output. DO NOT summarize. DO NOT replace with "(see answer)". The user wants to see what each peer said in their own words.
+3. totalPaid MUST equal the actual sum. If you called query_agent twice at $0.10 each, totalPaid is "0.20". Count only the [paid X.XX USDC ...] lines you actually saw in tool results. DO NOT estimate or round up.
+4. answer is your synthesis on TOP of the raw peer outputs — not a replacement for them.
+
 No prose outside JSON.`,
   defaultTestInput:
-    "Audit this contract for me, and also tell me the current price of USDC on Base. Contract:\n\npragma solidity ^0.8.20;\ncontract Tip { function tip(address to) external payable { (bool ok,) = to.call{value: msg.value}(\"\"); require(ok); } }",
+    "What is the current ETH/USD price? Use query_agent on oracles.slopstock.eth.",
 };
 
 // ─── Registry ───────────────────────────────────────────────────────────────

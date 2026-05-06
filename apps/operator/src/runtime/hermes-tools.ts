@@ -18,7 +18,8 @@
  * Adding a tool is a 10-line change: append to TOOL_REGISTRY.
  */
 
-import { keccak256, toHex, parseUnits, encodeFunctionData } from "viem";
+import { keccak256, toHex, parseUnits, parseEther, encodeFunctionData } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -329,6 +330,23 @@ const queryAgent: ToolDef = {
 
     // 2. Pay USDC.transfer(targetVault, amount) from this agent's wallet.
     const amount = BigInt(challenge.amount);
+
+    // Auto-fund: drip ETH + USDC from operator's deployer key if this agent's
+    // derived wallet is short. Single call handles both. The drip waits for
+    // tx confirmations AND polls balance until propagated, so the transfer
+    // below sees fresh state.
+    let dripNote: string | null = null;
+    try {
+      dripNote = await ensureAgentFunded(
+        wallet.address as Hex,
+        amount,
+        ctx.clients,
+        ctx.config,
+      );
+    } catch (e) {
+      console.warn(`[query_agent] drip failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     let txHash: Hex;
     try {
       txHash = await ctx.clients.baseWallet.writeContract({
@@ -376,7 +394,7 @@ const queryAgent: ToolDef = {
       facilitator: "chain",
       receiptId: `agent-${ctx.callerTokenId}-call-${ctx.callId.slice(0, 8)}-${Date.now()}`,
     });
-    let body: { output?: string; receipt?: unknown; callId?: string } = {};
+    let body: { output?: string; receipt?: unknown; callId?: string; status?: string } = {};
     try {
       const res = await fetch(`${ctx.peerOperatorUrl}/x402/infer`, {
         method: "POST",
@@ -395,6 +413,51 @@ const queryAgent: ToolDef = {
         return { text: `peer ${res.status}: ${t.slice(0, 200)}`, resultSummary: `peer ${res.status}` };
       }
       body = await res.json();
+
+      // The peer's /x402/infer is async — returns {status:"running", callId}
+      // immediately. Poll /x402/calls/<id> until complete (or 3min ceiling).
+      if (body.status === "running" && body.callId) {
+        const pollStart = Date.now();
+        const POLL_DEADLINE = 180_000;
+        const POLL_INTERVAL = 1500;
+        let resolved: { output?: string; receipt?: unknown; callId?: string; status?: string; message?: string } | null = null;
+        const peerCallId = body.callId;
+        console.log(`[query_agent] polling peer callId=${peerCallId.slice(0, 8)}…`);
+        while (Date.now() - pollStart < POLL_DEADLINE) {
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+          try {
+            const pr = await fetch(`${ctx.peerOperatorUrl}/x402/calls/${peerCallId}`);
+            if (pr.status === 404) {
+              console.warn(`[query_agent] peer poll 404 for callId=${peerCallId.slice(0, 8)}`);
+              break;
+            }
+            const pb = (await pr.json()) as { output?: string; receipt?: unknown; callId?: string; status?: string; message?: string };
+            if (pb && pb.status === "running") continue;
+            resolved = pb;
+            break;
+          } catch (err) {
+            console.warn(`[query_agent] peer poll error: ${err instanceof Error ? err.message : String(err)}`);
+            continue;
+          }
+        }
+        if (!resolved) {
+          return {
+            text: `peer call ${peerCallId.slice(0, 8)}… timed out after payment ${txHash}`,
+            resultSummary: "peer poll timeout",
+          };
+        }
+        if (resolved.status === "error") {
+          const errMsg = resolved.message ?? "unknown peer error";
+          console.warn(`[query_agent] peer returned error: ${errMsg.slice(0, 200)}`);
+          return {
+            text: `peer ${target} errored: ${errMsg.slice(0, 250)}\n[paid ${(Number(amount) / 1e6).toFixed(2)} USDC via ${txHash}]`,
+            resultSummary: `peer error: ${errMsg.slice(0, 60)}`,
+            meta: { txHash, peerCallId, peerError: errMsg },
+          };
+        }
+        console.log(`[query_agent] peer resolved status=${resolved.status} outputLen=${(resolved.output ?? "").length}`);
+        body = resolved;
+      }
     } catch (e) {
       return {
         text: `peer call failed after payment ${txHash}: ${e instanceof Error ? e.message : String(e)}`,
@@ -403,15 +466,183 @@ const queryAgent: ToolDef = {
     }
 
     const output = body.output ?? "(empty)";
+    const dripPrefix = dripNote ? `[operator gas relay: ${dripNote}]\n` : "";
     return {
       text:
-        `[paid ${(Number(amount) / 1e6).toFixed(2)} USDC to ${target} via ${txHash.slice(0, 14)}…]\n` +
+        dripPrefix +
+        `[paid ${(Number(amount) / 1e6).toFixed(2)} USDC to ${target} via ${txHash}]\n` +
         `[peer.callId=${body.callId ?? "?"}]\n\n${output}`,
-      resultSummary: `paid ${target} ${(Number(amount) / 1e6).toFixed(2)} USDC`,
-      meta: { txHash, peerCallId: body.callId, peerOutput: output },
+      resultSummary:
+        (dripNote ? "relay + " : "") +
+        `paid ${target} ${(Number(amount) / 1e6).toFixed(2)} USDC`,
+      meta: { txHash, peerCallId: body.callId, peerOutput: output, dripNote },
     };
   },
 };
+
+// ─── Auto-fund agent wallets (operator gas relay) ───────────────────
+//
+// Why this exists: x402 the protocol is gasless for the payer when using
+// EIP-3009 transferWithAuthorization + a facilitator. Our TestnetUSDC mock
+// is plain ERC-20 (no EIP-3009), so the payer signs and broadcasts its
+// own USDC.transfer — and therefore needs ETH for gas. For agent-to-agent
+// calls (where the payer is a derived wallet with no human UX to manage
+// gas) we top up from the operator's deployer key as a relay. The
+// subscriber-facing /x402/infer endpoint is untouched — those payers
+// manage their own gas like any web3 flow.
+
+const MIN_AGENT_ETH = parseEther("0.0001");      // ~enough for several Base Sepolia txs
+const TOPUP_AGENT_ETH = parseEther("0.0005");    // ~comfortable buffer
+const TOPUP_AGENT_USDC = parseUnits("1", 6);     // $1 — covers many cross-agent calls
+
+/** Per-address single-flight: if a top-up is in progress for an address,
+ *  later callers await the same promise instead of triggering parallel drips. */
+const inflightDrips = new Map<string, Promise<string | null>>();
+
+/**
+ * Ensures an agent wallet has enough ETH (gas) and at least `requiredUsdc`
+ * worth of USDC. Returns a short human-readable note describing what was
+ * dripped, or null if no drip was needed.
+ *
+ * Dripping ETH uses the operator's DEPLOYER_PRIVATE_KEY. Dripping USDC uses
+ * TestnetUSDC's public `mint(address,uint256)` (no auth — anyone can mint).
+ */
+async function ensureAgentFunded(
+  agentAddress: Hex,
+  requiredUsdc: bigint,
+  clients: Clients | undefined,
+  config: OperatorConfig,
+): Promise<string | null> {
+  if (!clients) return null;
+
+  const key = agentAddress.toLowerCase();
+  const inflight = inflightDrips.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const ethBalance = await clients.basePublic.getBalance({ address: agentAddress });
+    let usdcBalance: bigint = 0n;
+    try {
+      usdcBalance = (await clients.basePublic.readContract({
+        address: USDC_BASE_SEPOLIA as Hex,
+        abi: [
+          {
+            type: "function",
+            name: "balanceOf",
+            stateMutability: "view",
+            inputs: [{ name: "owner", type: "address" }],
+            outputs: [{ type: "uint256" }],
+          },
+        ] as const,
+        functionName: "balanceOf",
+        args: [agentAddress],
+      })) as bigint;
+    } catch {
+      /* assume 0 */
+    }
+
+    const needsEth = ethBalance < MIN_AGENT_ETH;
+    const needsUsdc = requiredUsdc > 0n && usdcBalance < requiredUsdc;
+    if (!needsEth && !needsUsdc) return null;
+    if (!config.DEPLOYER_PRIVATE_KEY) {
+      console.warn(`[query_agent] ${agentAddress} needs funding but no DEPLOYER_PRIVATE_KEY configured`);
+      return null;
+    }
+
+    const deployer = privateKeyToAccount(config.DEPLOYER_PRIVATE_KEY as Hex);
+    const notes: string[] = [];
+    const txs: Hex[] = [];
+
+    if (needsEth) {
+      try {
+        const hash = await clients.baseWallet.sendTransaction({
+          account: deployer,
+          chain: clients.baseWallet.chain,
+          to: agentAddress,
+          value: TOPUP_AGENT_ETH,
+        });
+        txs.push(hash);
+        notes.push(`+${(Number(TOPUP_AGENT_ETH) / 1e18).toFixed(4)} ETH`);
+        console.log(`[query_agent] dripped ETH to ${agentAddress}: ${hash}`);
+      } catch (e) {
+        console.warn(`[query_agent] ETH drip failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (needsUsdc) {
+      try {
+        const hash = await clients.baseWallet.writeContract({
+          account: deployer,
+          chain: clients.baseWallet.chain,
+          address: USDC_BASE_SEPOLIA as Hex,
+          abi: [
+            {
+              type: "function",
+              name: "mint",
+              stateMutability: "nonpayable",
+              inputs: [
+                { name: "to", type: "address" },
+                { name: "amount", type: "uint256" },
+              ],
+              outputs: [],
+            },
+          ] as const,
+          functionName: "mint",
+          args: [agentAddress, TOPUP_AGENT_USDC],
+        });
+        txs.push(hash);
+        notes.push(`+${(Number(TOPUP_AGENT_USDC) / 1e6).toFixed(2)} USDC`);
+        console.log(`[query_agent] minted USDC to ${agentAddress}: ${hash}`);
+      } catch (e) {
+        console.warn(`[query_agent] USDC mint failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // Wait for confirmations so the next step's transfer doesn't race.
+    await Promise.all(
+      txs.map((h) => clients.basePublic.waitForTransactionReceipt({ hash: h }).catch(() => null)),
+    );
+
+    // Public RPCs occasionally serve stale balances right after a tx confirms.
+    // Poll until the agent's balance reflects the drip — up to ~6s.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const ethNow = await clients.basePublic.getBalance({ address: agentAddress });
+      let usdcNow = 0n;
+      try {
+        usdcNow = (await clients.basePublic.readContract({
+          address: USDC_BASE_SEPOLIA as Hex,
+          abi: [
+            {
+              type: "function",
+              name: "balanceOf",
+              stateMutability: "view",
+              inputs: [{ name: "owner", type: "address" }],
+              outputs: [{ type: "uint256" }],
+            },
+          ] as const,
+          functionName: "balanceOf",
+          args: [agentAddress],
+        })) as bigint;
+      } catch {
+        /* keep prev */
+      }
+      const ethOk = !needsEth || ethNow >= MIN_AGENT_ETH;
+      const usdcOk = !needsUsdc || usdcNow >= requiredUsdc;
+      if (ethOk && usdcOk) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    return notes.length > 0 ? notes.join(" ") : null;
+  })();
+
+  inflightDrips.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    // Clear so a future call can re-drip if the wallet runs dry again.
+    inflightDrips.delete(key);
+  }
+}
 
 /**
  * Resolve a ticker ("AUDIT") or ENS name ("auditor.slopstock.eth") to an

@@ -10,6 +10,12 @@ const hex20 = /^0x[a-fA-F0-9]{40}$/;
 const envSchema = z.object({
   // Chains
   ZG_RPC_URL: z.string().url().default("https://evmrpc-testnet.0g.ai"),
+  // 0G Compute broker is a separate concern — testnet's compute marketplace
+  // has only a 7B text provider. Mainnet has DeepSeek V3, GLM-5.1, GPT-5.4-
+  // mini, etc. We point our chain reads at testnet (where iNFT + AgentRegistry
+  // live) and our compute broker at mainnet (where the good TeeML providers
+  // live). One operator key signs both.
+  ZG_COMPUTE_RPC_URL: z.string().url().default("https://evmrpc.0g.ai"),
   BASE_RPC_URL: z.string().url().default("https://base-sepolia-rpc.publicnode.com"),
   // Ethereum Sepolia — needed for real ENS resolution (slopstock.eth lives here).
   SEPOLIA_RPC_URL: z.string().url().default("https://ethereum-sepolia-rpc.publicnode.com"),

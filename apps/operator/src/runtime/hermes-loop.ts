@@ -27,7 +27,7 @@ import type { BackendAttestation, LLMBackend } from "./llm-backend.ts";
 import { type AgentTaskInput } from "./types.ts";
 import type { SkillDoc, parseFrontmatter as _parseFrontmatter } from "./hermes.ts";
 import { parseFrontmatter } from "./hermes.ts";
-import { TOOL_REGISTRY, hashArgs, renderToolListForPrompt, type ToolCtx } from "./hermes-tools.ts";
+import { TOOL_REGISTRY, hashArgs, type ToolCtx } from "./hermes-tools.ts";
 
 const MAX_TURNS = 8;
 const MIN_TOOLS_FOR_SKILL = 3;
@@ -37,6 +37,10 @@ interface AgentStateLite {
   db: import("bun:sqlite").Database;
   systemPrompt: string;
   skills: SkillDoc[];
+  /** Optional tool whitelist. Manifest-driven runtimes pass the manifest's
+   *  capabilities.tools; static (seed-driven) runtimes leave it undefined to
+   *  expose the full TOOL_REGISTRY (preserves pre-Real-Agent-Launch behavior). */
+  tools?: string[];
 }
 
 interface RunInput {
@@ -79,32 +83,36 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
 
   const callId = crypto.randomUUID();
 
-  // Build the conversation. System prompt + bundled skills + tool list +
-  // the actual user input.
+  // Build the conversation. The agent's system prompt drives behavior — it
+  // carries the role definition, the workflow guidance, and the final-answer
+  // schema. The loop only injects the generic tool-call protocol on top, so
+  // any agent (audit-specialized or not) can use this runtime.
+  //
+  // Tool whitelist: if state.tools is set (manifest-driven runtime), only
+  // those tools are exposed; otherwise the full TOOL_REGISTRY is offered
+  // (matches static-trio behavior pre-Real-Agent-Launch).
+  const allowedTools = state.tools ?? Object.keys(TOOL_REGISTRY);
+  const toolList = allowedTools
+    .map((name) => TOOL_REGISTRY[name])
+    .filter((t): t is NonNullable<typeof t> => Boolean(t));
   const systemContent = [
     state.systemPrompt.trim(),
     "",
     "── available tools ──────────────────────────────────────────",
-    renderToolListForPrompt(),
+    toolList.length === 0
+      ? "(none — emit your final answer directly)"
+      : toolList.map((t) => `  - ${t.name}: ${t.description}`).join("\n"),
     "",
     "── how to call a tool ──────────────────────────────────────",
     `Emit a JSON object: {"tool": "<name>", "args": { ... }}`,
     "Nothing else. The runtime executes it and replies with the result on the next turn.",
     "",
     "── how to finish ───────────────────────────────────────────",
-    "Emit ONLY the final audit JSON (with `summary`, `findings`, `summaryStats`, `modelMeta` keys, and NO `tool` key). No prose, no markdown fences.",
-    "",
-    "── workflow (MANDATORY ORDER) ──────────────────────────────",
-    'Turn 1 — emit exactly: {"tool":"parse_ast","args":{}} — read back the function/state inventory.',
-    'Turn 2 — if you saw any external call patterns, emit: {"tool":"pattern_search","args":{"pattern_name":"reentrancy"}} . If you saw any oracle/price reads (Uniswap getReserves, slot0, Chainlink, custom price math), emit instead: {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"<concrete pair> spot price reliability assessment"}} — query_agent pays ORCL via x402 and you cite the response. Otherwise pattern_search a different pattern.',
-    "Turn 3+ — call more tools as needed. Always cite a pattern body or peer-agent response in any finding's description.",
-    "Final turn — emit ONLY the final JSON. No `tool` key.",
-    "",
-    "You must call AT LEAST ONE tool before emitting the final JSON. Skipping straight to a finding without tool calls is wrong — the receipt's transcript is part of how subscribers verify your work.",
+    `Emit ONLY a final JSON answer (an object that does NOT have a "tool" key). No prose, no markdown fences. The exact schema lives in your role definition above.`,
     "",
     state.skills.length > 0 ? "── your accumulated skills ────────────────────────────────" : "",
     state.skills.length > 0
-      ? state.skills.map((s) => `▸ ${s.name}: ${s.frontmatter["description"] ?? ""}\n${s.body.slice(0, 600)}`).join("\n\n")
+      ? state.skills.map((s) => `▸ ${s.name}: ${s.frontmatter["description"] ?? ""}\n${s.body.slice(0, 4000)}`).join("\n\n")
       : "",
   ]
     .filter((x) => x !== "")
@@ -112,10 +120,7 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
 
   const messages: ChatMsg[] = [
     { role: "system", content: systemContent },
-    {
-      role: "user",
-      content: `Audit this Solidity source. Use tools as needed; do not output until you have a structured finding (or 'no issues found').\n\n--- input.sol ---\n${req.input}`,
-    },
+    { role: "user", content: req.input },
   ];
 
   // Persist initial user message to memory.
@@ -170,15 +175,18 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     const parsed = parseModelReply(completion.content);
     if (parsed.kind === "tool") {
       toolCallCount++;
-      const tool = TOOL_REGISTRY[parsed.tool];
+      const allowed = !state.tools || state.tools.includes(parsed.tool);
+      const tool = allowed ? TOOL_REGISTRY[parsed.tool] : undefined;
       if (!tool) {
-        const err = `unknown tool: ${parsed.tool}; available: ${Object.keys(TOOL_REGISTRY).join(", ")}`;
+        const err = !allowed
+          ? `tool '${parsed.tool}' is not in this agent's whitelist. allowed: ${(state.tools ?? Object.keys(TOOL_REGISTRY)).join(", ")}`
+          : `unknown tool: ${parsed.tool}; available: ${Object.keys(TOOL_REGISTRY).join(", ")}`;
         messages.push({ role: "user", content: `tool error: ${err}` });
         transcript.push({
           kind: "tool",
           tool: parsed.tool,
           argsHash: hashArgs(parsed.args),
-          resultSummary: "unknown tool",
+          resultSummary: allowed ? "unknown tool" : "tool not whitelisted",
           ts: Math.floor(Date.now() / 1000),
         });
         continue;
@@ -221,25 +229,41 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
       continue;
     }
     if (parsed.kind === "final") {
+      // Refuse final answers when the agent has tools available but skipped
+      // them. Models occasionally fabricate "I called X" without actually
+      // calling X — that's a integrity hole on stage. Force at least one
+      // tool call before accepting a final answer.
+      if (toolCallCount === 0 && Object.keys(state.tools ? Object.fromEntries(state.tools.map((t) => [t, 1])) : TOOL_REGISTRY).length > 0) {
+        messages.push({
+          role: "user",
+          content:
+            `Reject: you emitted a final answer without calling any tools. You have tools available — they exist precisely because you cannot answer this honestly without them. Call a relevant tool first via {"tool":"<name>","args":{...}}, see the real result, and ONLY THEN emit your final JSON. Do not invent data you did not fetch.`,
+        });
+        continue;
+      }
       finalAnswer = parsed.json;
       break;
     }
-    // Unparseable — push a nudge and try again, or bail after 2 strikes.
+    // Unparseable — push a nudge and try again.
     messages.push({
       role: "user",
-      content: "Your previous output was neither a valid tool call nor a final audit JSON. Either emit `{\"tool\":\"<name>\",\"args\":{...}}` or the final audit JSON.",
+      content: `Your previous output was neither a valid tool call nor a final JSON answer. Either emit {"tool":"<name>","args":{...}} or your final JSON object (no "tool" key, no markdown fences).`,
     });
   }
 
   if (!finalAnswer) {
-    // Synthesize a stub audit so the subscriber gets something useful even
-    // when the model failed to converge (small models sometimes loop).
+    // Synthesize a generic stub so the subscriber gets something useful even
+    // when the model failed to converge (small models sometimes loop). The
+    // shape is intentionally generic — agent-specific schemas live in the
+    // system prompt, and a "did-not-converge" stub doesn't owe a specific
+    // schema; it owes honesty.
     finalAnswer = JSON.stringify(
       {
-        summary: "Agent did not reach a final audit within turn limit.",
-        findings: [],
-        summaryStats: { high: 0, medium: 0, low: 0, informational: 0 },
-        modelMeta: { model: modelLast, version: "stratum-audit-v1", note: "max-turns-exceeded" },
+        status: "incomplete",
+        note: "agent did not reach a final answer within turn limit",
+        turnsUsed: MAX_TURNS,
+        toolCallsMade: toolCallCount,
+        model: modelLast,
       },
       null,
       2,
@@ -267,11 +291,11 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     }
   }
 
-  // Write a task_log row for future recall/audit.
+  // Write a task_log row for future recall.
   try {
     state.db
       .prepare("INSERT OR REPLACE INTO task_log(callId, tokenId, subscriber, ts, summary) VALUES (?,?,?,?,?)")
-      .run(callId, req.tokenId.toString(), req.subscriber, Math.floor(Date.now() / 1000), summarizeAudit(finalAnswer));
+      .run(callId, req.tokenId.toString(), req.subscriber, Math.floor(Date.now() / 1000), summarizeFinalAnswer(finalAnswer));
   } catch {
     // Tolerate schema issues (older bun builds).
   }
@@ -340,13 +364,22 @@ function extractHitCount(summary: string): number {
   return m ? Number(m[1]) : 0;
 }
 
-function summarizeAudit(finalJson: string): string {
+/**
+ * Best-effort one-line gist for the task_log. Tries common summary fields
+ * (summary, answer, brief, status) so it works for any template's final-
+ * answer schema; falls back to the first 180 chars of the raw JSON.
+ */
+function summarizeFinalAnswer(finalJson: string): string {
   try {
-    const obj = JSON.parse(finalJson) as { summary?: string };
-    return (obj.summary ?? "").slice(0, 180);
+    const obj = JSON.parse(finalJson) as Record<string, unknown>;
+    for (const k of ["summary", "answer", "brief", "concept", "status"]) {
+      const v = obj[k];
+      if (typeof v === "string" && v.length > 0) return v.slice(0, 180);
+    }
   } catch {
-    return finalJson.slice(0, 180);
+    /* fall through */
   }
+  return finalJson.slice(0, 180);
 }
 
 function insertMessage(db: import("bun:sqlite").Database, callId: string, role: string, content: string): void {
@@ -371,18 +404,19 @@ interface SkillSynthInput {
 }
 
 async function synthesizeSkill(backend: LLMBackend, input: SkillSynthInput): Promise<string | null> {
-  // Ask the LLM to write a Markdown skill doc summarizing this audit's
+  // Ask the LLM to write a Markdown skill doc summarizing this task's
   // approach. Fail-soft: if the model returns garbage, we just don't write
-  // a skill this turn.
+  // a skill this turn. Generic across agent kinds — the skill itself
+  // captures whatever pattern the agent used.
   const sys =
     "You synthesize agentskills.io-format Markdown skills from completed agent tasks. " +
     "Output exactly: a YAML frontmatter block with name/description/triggers, then a body with steps and edge cases. " +
-    "No prose outside the frontmatter+body. The skill should be reusable next time a similar audit comes in.";
+    "No prose outside the frontmatter+body. The skill should be reusable next time a similar task comes in.";
   const user =
-    `An agent just completed an audit. Synthesize the reusable knowledge.\n\n` +
+    `An agent just completed a task. Synthesize the reusable knowledge.\n\n` +
     `INPUT (truncated):\n${input.userInput.slice(0, 800)}\n\n` +
     `TRANSCRIPT (kinds + summaries):\n${input.transcript.map((s) => `${s.kind}: ${describeStep(s)}`).join("\n")}\n\n` +
-    `FINAL FINDING SUMMARY:\n${input.finalAnswer.slice(0, 1200)}\n\n` +
+    `FINAL ANSWER (truncated):\n${input.finalAnswer.slice(0, 1200)}\n\n` +
     `Write the skill (frontmatter + body):`;
   const result = await backend
     .call({

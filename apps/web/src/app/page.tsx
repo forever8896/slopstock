@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listAgents } from "@/lib/agents";
 import { formatUsdc } from "@/lib/format";
+import { DeleteAgentButton } from "@/components/delete-agent-button";
 
 export default async function Home() {
   const agents = await listAgents();
@@ -22,17 +23,16 @@ export default async function Home() {
             for <em><span className="typewriter">ai agents.</span></em>
           </h1>
           <p className="hero-sub">
-            mint a productive agent as an erc-7857 inft, fractionalize ownership into erc-20 shares,
-            distribute inference revenue to shareholders, transfer atomically without leaking model
-            weights via tee re-encryption. capital markets infrastructure for autonomous ai labor.
+            Each row below is a real agent serving paid inference. You can call one and pay
+            in USDC, or buy a share of one and earn pro-rata revenue every time it works.
+            Every payment, every distribution, every call settles on chain.
           </p>
 
           <div className="hero-meta">
-            <span className="pill ok">▌ tee-sealed</span>
-            <span className="pill">erc-7857 inft</span>
-            <span className="pill">erc-20 shares</span>
-            <span className="pill">ensip-25 registry</span>
-            <span className="pill">x402 paywall</span>
+            <span className="pill ok">▌ {agents.length} agents serving</span>
+            <span className="pill">${formatUsdc(cumulativeRevenue, 2)} paid total</span>
+            <span className="pill">{callsToday} calls today</span>
+            <span className="pill">{internalCalls} agent → agent</span>
           </div>
 
           <div className="hero-cta">
@@ -44,8 +44,19 @@ export default async function Home() {
           <div className="agent-event">
             <span className="glyph">↳</span>
             <span>
-              <b className="acc">AUDIT</b> autonomously paid <b className="acc">ORCL</b> 0.10 usdc
-              — used response in own reasoning. <span className="muted">tx 0xc870a5a3 · live on base-sepolia</span>
+              Live agent-to-agent payment: <b className="acc">AUDIT</b> hit a question it
+              couldn&apos;t answer alone, paid <b className="acc">ORCL</b> 0.10 USDC for a
+              price feed, used the response.{" "}
+              <a
+                href="https://sepolia.basescan.org/tx/0x79c7771d2eab5f54d30b0d2c2b53831e80957df58a331b457d94d122c4feeb72"
+                target="_blank"
+                rel="noreferrer"
+                className="acc"
+                style={{ textDecoration: "underline" }}
+              >
+                tx 0x79c7771d ↗
+              </a>
+              <span className="muted"> · base sepolia</span>
             </span>
           </div>
         </div>
@@ -96,9 +107,13 @@ export default async function Home() {
 
       {/* MARKETS */}
       <div className="markets-head">
-        <div style={{ display: "flex", gap: 14, alignItems: "baseline" }}>
-          <h2>markets · listed agents</h2>
-          <span className="muted">{agents.length} listed · sorted by cumulative revenue</span>
+        <div style={{ display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
+          <h2>the agents</h2>
+          <span className="muted">
+            click any row to see the agent&apos;s vault, holders, and recent calls. the green
+            <b className="acc"> new </b>tag means it was launched permissionlessly via{" "}
+            <Link href="/launch" className="acc" style={{ textDecoration: "underline" }}>/launch</Link>.
+          </span>
         </div>
         <div className="filters">
           <button className="on">all</button>
@@ -126,14 +141,28 @@ export default async function Home() {
             {agents.map((a) => {
               const isDynamic = "permissionless" in a;
               const href = `/agent/${a.ticker}`;
+              const callsCell = isDynamic && a.callsToday === 0 ? "—" : `${a.callsToday}`;
+              const revPerCall = isDynamic && a.callsToday === 0
+                ? <span className="muted">{a.perCallHuman}</span>
+                : a.perCallHuman;
               return (
                 <tr key={`${a.tokenId}-${a.ticker}`} className="click">
                   <td className="ticker">
-                    <Link href={href} style={{ display: "block" }}>{a.ticker}</Link>
+                    <Link href={href} style={{ display: "block" }}>
+                      {a.ticker}
+                      {isDynamic ? (
+                        <span
+                          className="pill ok"
+                          style={{ marginLeft: 8, fontSize: 9, padding: "2px 6px", verticalAlign: "middle" }}
+                        >
+                          new
+                        </span>
+                      ) : null}
+                    </Link>
                   </td>
                   <td>
                     <Link href={href} style={{ display: "block", color: "inherit" }}>
-                      <div>{AGENT_NAMES[a.ticker] ?? (isDynamic ? "permissionless agent · just minted" : a.ticker.toLowerCase())}</div>
+                      <div>{AGENT_NAMES[a.ticker] ?? (isDynamic ? "permissionless · just listed" : a.ticker.toLowerCase())}</div>
                       <div className="ens">{a.ens}</div>
                     </Link>
                   </td>
@@ -146,11 +175,20 @@ export default async function Home() {
                     ) : null}
                   </td>
                   <td className="num">{isDynamic ? "—" : `$${formatUsdc(a.pricePerShareUsdc, 2)}`}</td>
-                  <td className="num">{a.perCallHuman}</td>
+                  <td className="num">{revPerCall}</td>
                   <td className="num pos">{isDynamic ? "—" : `$${formatUsdc(a.cumulativeRevenueUsdc, 2)}`}</td>
-                  <td className="num">{a.callsToday}</td>
+                  <td className="num">{callsCell}</td>
                   <td>
-                    <Link href={href} className="acc">→</Link>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      {isDynamic ? (
+                        <DeleteAgentButton
+                          tokenId={a.tokenId}
+                          ticker={a.ticker}
+                          creator={(a as { creator: `0x${string}` }).creator}
+                        />
+                      ) : null}
+                      <Link href={href} className="acc">→</Link>
+                    </span>
                   </td>
                 </tr>
               );
@@ -187,19 +225,36 @@ export default async function Home() {
         ))}
       </div>
 
-      {/* SPONSOR STRIP */}
+      {/* TWO PATHS · USE OR BUY */}
       <div className="section-h">
-        <h2>integration · sponsor stack</h2>
-        <span className="sub">each component visible in the live demo</span>
+        <h2>two ways to interact</h2>
+        <span className="sub">the agent gets paid either way · shareholders earn from inference</span>
       </div>
-      <div className="panel" style={{ padding: 0 }}>
-        <div className="sponsors">
-          <Sponsor head="0g" body="inft storage · sealed inference" foot="teeml attestation" />
-          <Sponsor head="uniswap v3" body="pay-with-eth bridge" foot="subscribe flow" />
-          <Sponsor head="gensyn axl" body="p2p mcp delivery" foot="tool transport" />
-          <Sponsor head="keeperhub" body="revenue distribution" foot="erc-8004 keepers" />
-          <Sponsor head="ens" body="subnames as api keys" foot="ensip-25 registry" last />
-        </div>
+      <div className="ds-grid cols-2" style={{ gap: "var(--gap)" }}>
+        <Link href="/agent/AUDIT/subscribe" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
+          <div className="up" style={{ marginBottom: 6 }}>① call an agent</div>
+          <div style={{ fontSize: 18, color: "var(--fg)", marginBottom: 6 }}>
+            pay a per-call fee → get a TEE-attested response
+          </div>
+          <div style={{ color: "var(--fg-2)" }}>
+            Operator returns a 402 with the agent&apos;s vault and price. You settle in USDC
+            (or pay ETH and let Uniswap swap to USDC into the same vault). The vault accumulates;
+            the agent runs; you get back a signed receipt.
+          </div>
+          <div className="acc" style={{ marginTop: 10 }}>try it on AUDIT →</div>
+        </Link>
+        <Link href="/agent/AUDIT/acquire" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
+          <div className="up" style={{ marginBottom: 6 }}>② buy a share of one</div>
+          <div style={{ fontSize: 18, color: "var(--fg)", marginBottom: 6 }}>
+            mint ERC-20 shares from the IPO → earn future revenue pro-rata
+          </div>
+          <div style={{ color: "var(--fg-2)" }}>
+            Each agent has its own ShareToken (1M cap). The IPO sells from the creator&apos;s
+            treasury at a fixed USDC price. Every call into the vault is later snapshotted and
+            paid out to holders by share weight.
+          </div>
+          <div className="acc" style={{ marginTop: 10 }}>open AUDIT&apos;s cap table →</div>
+        </Link>
       </div>
 
     </>
@@ -218,20 +273,10 @@ function Stat({ label, value, sub, delta }: { label: string; value: string; sub?
   );
 }
 
-function Sponsor({ head, body, foot, last }: { head: string; body: string; foot: string; last?: boolean }) {
-  return (
-    <div style={{ padding: "14px 16px", borderRight: last ? "0" : "1px solid var(--hair-2)" }}>
-      <div className="up">{head}</div>
-      <div style={{ marginTop: 6, fontSize: 12 }}>{body}</div>
-      <div className="muted" style={{ fontSize: 10.5, marginTop: 4 }}>{foot}</div>
-    </div>
-  );
-}
-
 const AGENT_NAMES: Record<string, string> = {
   AUDIT: "solidity audit agent",
-  MEMER: "ruggability scout · single-shot",
-  ORCL: "price-source oracle · agent-callable",
+  MEMER: "ruggability scout · hermes",
+  ORCL: "price-source oracle · live-fetch",
 };
 
 const ASCII_DIAGRAM = `                      ┌──────────────────┐

@@ -53,6 +53,44 @@ export interface InferError {
 
 export type InferResult = InferSuccess | InferPaymentRequired | InferError;
 
+/**
+ * Poll /x402/calls/:callId until the operator's background inference
+ * settles. Lets us survive the Railway proxy's 60s edge timeout for slow
+ * paths (mainnet TEE + cross-agent x402 + Hermes can run 30-90s).
+ */
+async function pollInferResult(callId: string): Promise<InferResult> {
+  const POLL_INTERVAL_MS = 2000;
+  const MAX_WAIT_MS = 180_000;
+  const start = Date.now();
+  while (Date.now() - start < MAX_WAIT_MS) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    let res: Response;
+    try {
+      res = await fetch(`${OPERATOR_URL}/x402/calls/${callId}`, { cache: "no-store" });
+    } catch {
+      // Transient network error mid-poll — try again next tick.
+      continue;
+    }
+    if (res.status === 404) {
+      return { ok: false, kind: "error", status: 404, message: "call not found (operator restarted?)" };
+    }
+    let body: { status?: string; callId?: string; output?: string; receipt?: InferenceReceipt; message?: string };
+    try {
+      body = await res.json();
+    } catch {
+      continue;
+    }
+    if (body.status === "running") continue;
+    if (body.status === "complete" && body.callId && body.output && body.receipt) {
+      return { ok: true, callId: body.callId, output: body.output, receipt: body.receipt };
+    }
+    if (body.status === "error") {
+      return { ok: false, kind: "error", status: 500, message: body.message ?? "operator error" };
+    }
+  }
+  return { ok: false, kind: "error", status: 0, message: "polling timed out (>3min)" };
+}
+
 export async function infer(req: InferRequest): Promise<InferResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (req.paymentReceipt) {
@@ -89,7 +127,18 @@ export async function infer(req: InferRequest): Promise<InferResult> {
     return { ok: false, kind: "error", status: res.status, message: text || res.statusText };
   }
 
-  const body = (await res.json()) as { callId: string; output: string; receipt: InferenceReceipt };
-  return { ok: true, ...body };
+  const body = (await res.json()) as
+    | { callId: string; output: string; receipt: InferenceReceipt }
+    | { ok: true; status: "running"; callId: string };
+
+  // Async path: operator returned a callId, kicked off in background. Poll.
+  if ("status" in body && body.status === "running") {
+    return await pollInferResult(body.callId);
+  }
+  // Backward-compat sync path (e.g. older operators or future fast paths).
+  if ("output" in body && "receipt" in body && body.callId) {
+    return { ok: true, callId: body.callId, output: body.output, receipt: body.receipt };
+  }
+  return { ok: false, kind: "error", status: 500, message: "operator response in unknown shape" };
 }
 

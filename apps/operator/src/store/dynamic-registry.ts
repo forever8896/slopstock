@@ -43,6 +43,9 @@ export interface DynamicAgent {
     maxShares: string;
     deployedAt: number;
   };
+  /** Populated when the operator registers a real ENS subname under
+   *  slopstock.eth pointing at the vault. e.g. "whale.slopstock.eth". */
+  ensName?: string;
   // ─── Manifest fields (set when the agent was minted with a real-agent
   //     bundle on 0G Storage). Optional for backward compat with v1 dynamic
   //     agents. See docs/12-real-agent-launch.md. ────────────────────────
@@ -135,4 +138,35 @@ export async function attachFinance(
     `[dynamic-registry] tokenId=${tokenId} finance: share=${finance.shareToken} vault=${finance.revenueVault} ipo=${finance.ipoSale}`,
   );
   return updated;
+}
+
+export async function attachEnsName(
+  tokenId: string,
+  ensName: string,
+): Promise<DynamicAgent | null> {
+  await ensureLoaded();
+  const existing = cache.get(tokenId);
+  if (!existing) return null;
+  const updated: DynamicAgent = { ...existing, ensName };
+  cache.set(tokenId, updated);
+  setDynamicSnapshot(new Map(cache));
+  await flush();
+  console.log(`[dynamic-registry] tokenId=${tokenId} ensName=${ensName}`);
+  return updated;
+}
+
+/**
+ * Permanently remove a dynamic agent from the registry. The on-chain iNFT,
+ * vault, IPO, and ShareToken still exist — this only affects the operator's
+ * routing table and the homepage listing. Idempotent: returns false if the
+ * agent wasn't there.
+ */
+export async function deleteDynamicAgent(tokenId: string): Promise<boolean> {
+  await ensureLoaded();
+  if (!cache.has(tokenId)) return false;
+  cache.delete(tokenId);
+  setDynamicSnapshot(new Map(cache));
+  await flush();
+  console.log(`[dynamic-registry] deleted tokenId=${tokenId}`);
+  return true;
 }

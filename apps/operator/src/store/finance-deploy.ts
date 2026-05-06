@@ -15,11 +15,32 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { createPublicClient, createWalletClient, http, parseUnits } from "viem";
+import { createPublicClient, createWalletClient, http, parseGwei, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
+import { USDC_BASE_SEPOLIA } from "@stratum/shared";
 
+/**
+ * Base Sepolia fee headroom. Base fee is typically ~0.005 gwei but ticks up
+ * unpredictably; viem's default `estimateFeesPerGas` returns values right at
+ * the edge (`baseFee * 1.2 + tip`), and publicnode rejects with a generic
+ * "check your parameters" 400 the moment base fee drifts above the cap.
+ *
+ * 1 gwei priority + 2 gwei max is ~200x current base fee — still costs
+ * <0.005 ETH per deploy at typical gas limits and survives any realistic
+ * Sepolia spike.
+ */
+const TX_FEES = {
+  maxPriorityFeePerGas: parseGwei("1"),
+  maxFeePerGas: parseGwei("2"),
+} as const;
+
+// kept for backward reference; we now bind vault + IPO to TestnetUSDC because
+// that's what the Uniswap V3 pool delivers (WETH/TestnetUSDC) and what the
+// operator's x402 validator looks for. Binding to Circle USDC produced empty-
+// vault snap reverts even though TestnetUSDC was correctly received.
 const CIRCLE_USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
+void CIRCLE_USDC_BASE_SEPOLIA;
 const ZG_AGENT_NFT = "0x96BDA325345b0c8b7946567D30648cf8a422eb59" as const;
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -96,6 +117,7 @@ export async function deployFinanceStack(input: DeployFinanceInput): Promise<Dep
       input.ticker,
       input.creator,
     ],
+    ...TX_FEES,
   });
   console.log(`[finance-deploy] ShareToken tx=${stHash}`);
   const stReceipt = await pub.waitForTransactionReceipt({ hash: stHash });
@@ -107,7 +129,8 @@ export async function deployFinanceStack(input: DeployFinanceInput): Promise<Dep
   const vaultHash = await wallet.deployContract({
     abi: vaultArt.abi as never,
     bytecode: vaultArt.bytecode,
-    args: [CIRCLE_USDC_BASE_SEPOLIA, shareToken, tokenId],
+    args: [USDC_BASE_SEPOLIA, shareToken, tokenId],
+    ...TX_FEES,
   });
   console.log(`[finance-deploy] RevenueVault tx=${vaultHash}`);
   const vaultReceipt = await pub.waitForTransactionReceipt({ hash: vaultHash });
@@ -121,13 +144,14 @@ export async function deployFinanceStack(input: DeployFinanceInput): Promise<Dep
     bytecode: ipoArt.bytecode,
     args: [
       shareToken,
-      CIRCLE_USDC_BASE_SEPOLIA,
+      USDC_BASE_SEPOLIA,
       pricePerShareSmallest,
       maxShares,
       input.creator,
       startsAt,
       endsAt,
     ],
+    ...TX_FEES,
   });
   console.log(`[finance-deploy] IPOSale tx=${ipoHash}`);
   const ipoReceipt = await pub.waitForTransactionReceipt({ hash: ipoHash });

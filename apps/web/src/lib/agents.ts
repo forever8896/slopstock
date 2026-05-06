@@ -24,7 +24,12 @@ export interface AgentSummary {
   perCallUsdc: bigint;
   perCallHuman: string;
   pricePerShareUsdc: bigint;
+  /** Lifetime revenue: best-effort estimate (sum of snapshot balances + current
+   *  vault balance). Over-counts when distributeTo hasn't been called for all
+   *  holders, so use vaultBalanceUsdc for the "current pending" UI. */
   cumulativeRevenueUsdc: bigint;
+  /** USDC sitting in the RevenueVault right now, awaiting distribution. */
+  vaultBalanceUsdc: bigint;
   callsToday: number;
   runtime: "hermes" | "openai-compat";
 }
@@ -87,6 +92,8 @@ const SECONDS_PER_DAY = 86_400;
 
 export interface DynamicAgentSummary extends AgentSummary {
   permissionless: true;
+  /** Creator address — owner of the iNFT. Required to authorize delete. */
+  creator: Hex;
 }
 
 /**
@@ -123,6 +130,10 @@ interface DynamicAgentRecord {
   perCallHuman: string;
   runtime: "hermes" | "openai-compat";
   finance?: { shareToken: string; revenueVault: string; ipoSale: string };
+  /** Real ENS subname under slopstock.eth set by the operator after
+   *  deploy-finance. e.g. "whale.slopstock.eth". Falls back to placeholder
+   *  if not yet registered. */
+  ensName?: string;
   // Real-Agent Launch fields (optional)
   templateId?: string;
   runtimeTier?: "openai-compat" | "tools-lite" | "hermes";
@@ -176,7 +187,7 @@ async function resolveAgentForReads(ticker: string): Promise<ResolvedAgent | nul
     const baseDeployBlock = head > 50_000n ? head - 50_000n : 0n;
     return {
       ticker: upper,
-      ens: `${upper.toLowerCase()}.permissionless`,
+      ens: dyn.ensName ?? `${upper.toLowerCase()}.permissionless`,
       tokenId: BigInt(dyn.tokenId),
       shareToken: dyn.finance.shareToken as Hex,
       revenueVault: dyn.finance.revenueVault as Hex,
@@ -255,19 +266,23 @@ async function listDynamicAgentSummaries(): Promise<DynamicAgentSummary[]> {
         perCallSmallest: string;
         perCallHuman: string;
         runtime: "openai-compat" | "hermes";
+        ensName?: string;
+        creator: string;
       }>;
     };
     return body.agents.map((a) => ({
       ticker: a.ticker,
-      ens: `${a.ticker.toLowerCase()}.permissionless`,
+      ens: a.ensName ?? `${a.ticker.toLowerCase()}.permissionless`,
       tokenId: BigInt(a.tokenId),
       perCallUsdc: BigInt(a.perCallSmallest),
       perCallHuman: a.perCallHuman,
       pricePerShareUsdc: 0n,
       cumulativeRevenueUsdc: 0n,
+      vaultBalanceUsdc: 0n,
       callsToday: 0,
       runtime: a.runtime,
       permissionless: true as const,
+      creator: a.creator as Hex,
     }));
   } catch {
     return [];
@@ -278,19 +293,24 @@ export async function loadAgentSummary(ticker: string): Promise<AgentSummary> {
   const agent = getAgent(ticker);
   const meta = mustMeta(ticker);
 
-  const [pricePerShareUsdc, snapshots] = await Promise.all([
+  const [pricePerShareUsdc, snapshots, vaultBalanceUsdc] = await Promise.all([
     basePublicClient.readContract({
       address: agent.ipoSale,
       abi: ipoSaleAbi,
       functionName: "pricePerShare",
     }),
     loadSnapshots(ticker),
+    readUsdcBalance(agent.revenueVault),
   ]);
 
-  const cumulativeRevenueUsdc = snapshots.reduce(
+  // "Cumulative revenue" = USDC distributed via snap() + USDC currently
+  // sitting in the vault waiting to be snapped. That second part is the
+  // common case until a keeper or owner triggers distribution.
+  const distributedUsdc = snapshots.reduce(
     (acc, s) => acc + s.totalDistributedUsdc,
     0n,
   );
+  const cumulativeRevenueUsdc = distributedUsdc + vaultBalanceUsdc;
   const callsToday = await callsInLastNSeconds(ticker, SECONDS_PER_DAY);
 
   return {
@@ -301,9 +321,33 @@ export async function loadAgentSummary(ticker: string): Promise<AgentSummary> {
     perCallHuman: meta.perCallHuman,
     pricePerShareUsdc,
     cumulativeRevenueUsdc,
+    vaultBalanceUsdc,
     callsToday,
     runtime: agent.runtime,
   };
+}
+
+/** ERC-20 balanceOf for the agent's payment asset (TestnetUSDC). Matches the
+ *  vault's immutable paymentAsset and what x402/Uniswap deliver into vaults. */
+async function readUsdcBalance(vault: Hex): Promise<bigint> {
+  try {
+    return (await basePublicClient.readContract({
+      address: "0xd44e0c3a9fa12e5c00c1714b51f4d8607962e603", // TestnetUSDC on Base Sepolia
+      abi: [
+        {
+          type: "function",
+          name: "balanceOf",
+          stateMutability: "view",
+          inputs: [{ name: "owner", type: "address" }],
+          outputs: [{ type: "uint256" }],
+        },
+      ] as const,
+      functionName: "balanceOf",
+      args: [vault],
+    })) as bigint;
+  } catch {
+    return 0n;
+  }
 }
 
 export async function loadAgentDetail(ticker: string): Promise<AgentDetail | null> {
@@ -325,12 +369,14 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
       perCallHuman: resolved.perCallHuman ?? "$0.00",
       pricePerShareUsdc: 0n,
       cumulativeRevenueUsdc: 0n,
+      vaultBalanceUsdc: 0n,
       callsToday: 0,
       runtime: resolved.runtime,
       name: resolved.ticker.toLowerCase(),
       description: resolved.description ?? "Permissionless agent — shares not yet deployed.",
       modelBase: resolved.modelBase ?? "(unknown)",
-      expectedTeeMeasurement: ("0x" + "00".repeat(32)) as Hex,
+      expectedTeeMeasurement: (resolved.realAgent?.bundleManifestCid ??
+        ("0x" + "00".repeat(32))) as Hex,
       ipo: {
         pricePerShareUsdc: 0n,
         sold: 0n,
@@ -414,11 +460,15 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
     })),
   ]);
 
-  const snapshots = await loadSnapshots(resolved.ticker).catch(() => []);
-  const cumulativeRevenueUsdc = snapshots.reduce(
+  const [snapshots, vaultBalanceUsdc] = await Promise.all([
+    loadSnapshots(resolved.ticker).catch(() => []),
+    readUsdcBalance(resolved.revenueVault).catch(() => 0n),
+  ]);
+  const distributedUsdc = snapshots.reduce(
     (acc, s) => acc + s.totalDistributedUsdc,
     0n,
   );
+  const cumulativeRevenueUsdc = distributedUsdc + vaultBalanceUsdc;
   const callsToday = await callsInLastNSeconds(resolved.ticker, SECONDS_PER_DAY).catch(
     () => 0,
   );
@@ -432,13 +482,16 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
     perCallHuman: staticMeta?.perCallHuman ?? resolved.perCallHuman ?? "$0.00",
     pricePerShareUsdc: pricePerShare,
     cumulativeRevenueUsdc,
+    vaultBalanceUsdc,
     callsToday,
     runtime: resolved.runtime,
     name: staticMeta?.name ?? resolved.ticker.toLowerCase(),
     description: staticMeta?.description ?? resolved.description ?? "",
     modelBase: staticMeta?.modelBase ?? resolved.modelBase ?? "(unknown)",
     expectedTeeMeasurement:
-      staticMeta?.expectedTeeMeasurement ?? (("0x" + "00".repeat(32)) as Hex),
+      staticMeta?.expectedTeeMeasurement ??
+      (resolved.realAgent?.bundleManifestCid as Hex | undefined) ??
+      (("0x" + "00".repeat(32)) as Hex),
     ipo: {
       pricePerShareUsdc: pricePerShare,
       sold,
@@ -472,6 +525,15 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
  * Public RPCs cap getLogs at ~50k blocks per call, so we paginate from the
  * agent's deploy block to head. Once @stratum/indexer ships, replace with a
  * single REST call.
+ *
+ * Edge case: `baseDeployBlock` historically referred to when the IPO+Vault
+ * were deployed for an agent, but the ShareToken was minted in the *same
+ * campaign* and may sit one or two blocks earlier. For the seed agents that
+ * gap can be wider after a vault redeploy. Walking strictly from
+ * baseDeployBlock would miss the initial mint to the IPO beneficiary —
+ * leaving distributeTo stuck paying ~0% of the vault. We close the gap
+ * by always reading the IPOSale beneficiary's `balanceOf` and merging that
+ * holder in (`max` so the balanceOf is authoritative if events lagged).
  */
 export async function loadHolders(ticker: string): Promise<Holder[]> {
   const resolved = await resolveAgentForReads(ticker);
@@ -503,6 +565,28 @@ export async function loadHolders(ticker: string): Promise<Holder[]> {
         balances.set(args.to, (balances.get(args.to) ?? 0n) + args.value);
       }
     }
+  }
+
+  // Always include the IPO beneficiary — the treasury wallet that holds
+  // any share supply not yet sold. balanceOf is authoritative.
+  try {
+    const beneficiary = (await basePublicClient.readContract({
+      address: resolved.ipoSale,
+      abi: ipoSaleAbi,
+      functionName: "beneficiary",
+    })) as Hex;
+    const benBalance = (await basePublicClient.readContract({
+      address: resolved.shareToken,
+      abi: shareTokenAbi,
+      functionName: "balanceOf",
+      args: [beneficiary],
+    })) as bigint;
+    if (benBalance > 0n) {
+      const existing = balances.get(beneficiary) ?? 0n;
+      if (benBalance > existing) balances.set(beneficiary, benBalance);
+    }
+  } catch {
+    /* IPO unreachable — fall through with whatever the event walk gave us */
   }
 
   return [...balances.entries()]

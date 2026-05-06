@@ -20,7 +20,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { writeFile, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import {
   computeManifestHash,
   normalizeRootHash,
@@ -47,15 +46,26 @@ interface CacheEntry extends MaterializedManifest {
 const CACHE_MAX = 32;
 const cache = new Map<string, CacheEntry>();
 
-function bundlesRoot(): string {
-  const root = join(tmpdir(), "stratum-operator-bundles");
+/**
+ * Where materialized manifests live on disk. Used to be `tmpdir()` but that
+ * meant skills auto-created by Hermes for permissionless mints died on every
+ * restart — undermining the "your agent learns over time" pitch. Now we
+ * write to AGENTS_DATA_DIR (which on Railway is the persistent volume), so
+ * permissionless Hermes mints get the same skill-persistence semantics as
+ * the static trio.
+ */
+function bundlesRoot(dataDir: string): string {
+  const root = join(dataDir, "permissionless-bundles");
   if (!existsSync(root)) mkdirSync(root, { recursive: true });
   return root;
 }
 
-function evictIfNeeded(): void {
+function evictIfNeeded(dataDir: string): void {
   if (cache.size <= CACHE_MAX) return;
-  // Evict the oldest by lastUsed.
+  // Evict the oldest by lastUsed. NOTE: we no longer rm() the materialized
+  // dir on eviction — the bundle dir holds the agent's accumulated state
+  // (skills, memory.db) and we want it preserved across LRU churn so a
+  // re-call can rehydrate from disk. Only the in-memory entry is dropped.
   let oldestKey: string | null = null;
   let oldestTs = Infinity;
   for (const [k, v] of cache) {
@@ -64,11 +74,9 @@ function evictIfNeeded(): void {
       oldestKey = k;
     }
   }
-  if (oldestKey) {
-    cache.delete(oldestKey);
-    // Best-effort dir cleanup.
-    void rm(join(bundlesRoot(), oldestKey), { recursive: true, force: true });
-  }
+  if (oldestKey) cache.delete(oldestKey);
+  void dataDir; // dataDir kept in signature for future explicit cleanup
+  void rm; // imported for parity; not used after persistence pivot
 }
 
 export interface LoadManifestOpts {
@@ -149,7 +157,7 @@ export async function loadAndMaterialize(opts: LoadManifestOpts): Promise<Materi
   }
 
   // Materialize.
-  const agentDir = join(bundlesRoot(), opts.tokenId);
+  const agentDir = join(bundlesRoot(opts.dataDir), opts.tokenId);
   mkdirSync(join(agentDir, "patterns"), { recursive: true });
   mkdirSync(join(agentDir, "skills"), { recursive: true });
   await writeFile(join(agentDir, "system.md"), manifest.brain.systemPrompt, "utf-8");
@@ -179,7 +187,7 @@ export async function loadAndMaterialize(opts: LoadManifestOpts): Promise<Materi
     lastUsed: Date.now(),
   };
   cache.set(opts.tokenId, entry);
-  evictIfNeeded();
+  evictIfNeeded(opts.dataDir);
   return entry;
 }
 

@@ -11,6 +11,8 @@ import {
 } from "@/lib/agents";
 import { ensAppUrl, verifyEns, type EnsVerification } from "@/lib/ens";
 import { formatShares, formatUsdc, pctOf, relativeTime, shortAddr } from "@/lib/format";
+import { DistributeButton } from "@/components/distribute-button";
+import { AnimatedTicker } from "@/components/animated-ticker";
 
 interface PageProps {
   params: Promise<{ ticker: string }>;
@@ -37,17 +39,17 @@ export default async function AgentDetailPage({ params }: PageProps) {
       <section className="agent-head">
         <div className="agent-head-l">
           <div className="ribbon">
-            tee-verified · {agent.runtime === "hermes" ? "0g compute" : "openai-compat"} · teeml signed
+            this is one agent&apos;s page · everything below is its own state on chain
           </div>
           <div className="agent-tk">
             <div className="tk">{agent.ticker}</div>
             <div className="ens"><b>{agent.ens}</b></div>
             <EnsBadge verification={ensVerification} ens={agent.ens} />
             <span className={`pill runtime-pill ${agent.runtime === "hermes" ? "hermes" : "raw"}`}>
-              {agent.runtime === "hermes" ? "hermes" : "raw"}
+              {agent.runtime === "hermes" ? "hermes runtime" : "raw runtime"}
             </span>
-            <span className="pill">erc-7857 inft</span>
-            <span className="pill">live · base-sepolia</span>
+            <span className="pill">${agent.perCallHuman}/call</span>
+            <span className="pill ok">{agent.callsToday} calls today</span>
           </div>
           <p className="agent-desc">{agent.description}</p>
 
@@ -99,13 +101,16 @@ export default async function AgentDetailPage({ params }: PageProps) {
             </div>
           ) : null}
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
             <Link className="btn primary" href={`/agent/${agent.ticker}/subscribe`}>
-              subscribe — submit inference →
+              call this agent →
             </Link>
             <Link className="btn" href={`/agent/${agent.ticker}/acquire`}>
-              acquire shares
+              buy shares of it
             </Link>
+            <span className="muted" style={{ fontSize: 14 }}>
+              calling pays the vault. owning a share earns from every call.
+            </span>
           </div>
 
           <div className="agent-attest-grid">
@@ -133,23 +138,10 @@ export default async function AgentDetailPage({ params }: PageProps) {
         </div>
 
         <div className="agent-head-r">
-          <div className="col-h">
-            <span className="ttl">price · 24h</span>
-            <span className="meta">${formatUsdc(agent.pricePerShareUsdc, 2)} / share</span>
-          </div>
-          <Sparkline kind="line" />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--mute)" }}>
-            <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span>
-          </div>
-
-          <div className="col-h" style={{ marginTop: 18 }}>
-            <span className="ttl">revenue · 24h</span>
-            <span className="meta">${formatUsdc(agent.cumulativeRevenueUsdc, 2)} cum</span>
-          </div>
-          <Sparkline kind="bars" />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--mute)" }}>
-            <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span>
-          </div>
+          <AnimatedTicker
+            ticker={agent.ticker}
+            sub={`${agent.ens} · #${agent.tokenId.toString()}`}
+          />
         </div>
       </section>
 
@@ -218,13 +210,51 @@ export default async function AgentDetailPage({ params }: PageProps) {
             />
           </div>
 
-          <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <span className="badge-tee">
-              <span className="lk">[lock]</span>{" "}
-              {agent.runtime === "hermes" ? "0g compute · tee verified" : "openai-compat · sealed"}
-            </span>
-            <span className="pill warn">x402 paywalled</span>
-            <span className="pill">keeperhub auto-dist</span>
+          <div
+            style={{
+              marginTop: 14,
+              border: "1px solid rgba(16,185,129,0.35)",
+              background: "rgba(16,185,129,0.04)",
+              borderRadius: 2,
+              padding: "16px 18px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 10,
+              }}
+            >
+              <span className="acc mono-h" style={{ color: "var(--accent)" }}>
+                ▌ distribute revenue
+              </span>
+              <span className="badge amber">action available</span>
+            </div>
+            <div className="mono-h" style={{ fontSize: 12, marginBottom: 4 }}>vault balance</div>
+            <div
+              style={{
+                fontSize: 36,
+                color: "var(--accent)",
+                fontWeight: 600,
+                fontVariantNumeric: "tabular-nums",
+                letterSpacing: "-0.01em",
+                marginBottom: 6,
+              }}
+            >
+              ${formatUsdc(agent.vaultBalanceUsdc, 2)}
+            </div>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+              USDC paid by callers since the last distribution. Snap → push pays it pro-rata to all
+              {" "}
+              <b className="acc">{holders.length}</b> holder{holders.length === 1 ? "" : "s"}.
+              Anyone can do this; the contract enforces share-weighted fairness.
+            </div>
+            <DistributeButton
+              vault={agent.contracts.vault}
+              holders={holders.map((h) => h.address)}
+            />
           </div>
         </div>
       </section>
@@ -251,8 +281,11 @@ export default async function AgentDetailPage({ params }: PageProps) {
       </div>
 
       <div className="section-h">
-        <h2>recent inferences · live tape</h2>
-        <span className="sub">x402 paid · tee-verified · agent→agent threads highlighted</span>
+        <h2>recent calls</h2>
+        <span className="sub">
+          one row per inference. each one paid the vault and emitted a TEE-signed receipt.
+          agent→agent threads (where this agent paid another to help) are highlighted.
+        </span>
       </div>
 
       <InferencesPanel inferences={inferences} ticker={agent.ticker} />
@@ -441,38 +474,6 @@ function InferencesPanel({ inferences, ticker }: { inferences: InferenceLog[]; t
         ) : null}
       </div>
     </div>
-  );
-}
-
-function Sparkline({ kind }: { kind: "line" | "bars" }) {
-  if (kind === "line") {
-    return (
-      <svg className="spark" viewBox="0 0 320 60" preserveAspectRatio="none" style={{ marginTop: 6 }}>
-        <line className="ax" x1="0" y1="30" x2="320" y2="30" />
-        <path
-          className="area"
-          d="M0,42 L20,40 L40,38 L60,42 L80,30 L100,32 L120,28 L140,22 L160,26 L180,18 L200,20 L220,14 L240,18 L260,12 L280,16 L300,10 L320,8 L320,60 L0,60 Z"
-        />
-        <path
-          className="line"
-          d="M0,42 L20,40 L40,38 L60,42 L80,30 L100,32 L120,28 L140,22 L160,26 L180,18 L200,20 L220,14 L240,18 L260,12 L280,16 L300,10 L320,8"
-        />
-      </svg>
-    );
-  }
-  const bars = [56, 48, 56, 42, 56, 50, 56, 38, 56, 46, 56, 34, 56, 40, 56, 28, 56, 32, 56, 22, 56, 26, 56, 20, 56, 30, 56, 18, 56, 22, 56, 14, 56, 10, 56, 18, 56, 12, 56, 20, 56, 8, 56, 14, 56, 6];
-  // pairs: x1=y1=56 (baseline) / x2=y2 (top)
-  return (
-    <svg className="spark" viewBox="0 0 320 60" preserveAspectRatio="none" style={{ marginTop: 6 }}>
-      <line className="ax" x1="0" y1="30" x2="320" y2="30" />
-      <g stroke="var(--accent)" strokeWidth="2" opacity="0.85">
-        {Array.from({ length: 23 }).map((_, i) => {
-          const x = 6 + i * 14;
-          const y = bars[i * 2 + 1] ?? 30;
-          return <line key={i} x1={x} y1="56" x2={x} y2={y} />;
-        })}
-      </g>
-    </svg>
   );
 }
 

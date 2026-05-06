@@ -9,6 +9,7 @@
 import { createPublicClient, createWalletClient, http, type Chain, type PublicClient, type WalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OperatorConfig } from "../config.ts";
+import { staticVaultOverride } from "./static-vaults.ts";
 
 // 0G Galileo testnet — chain id 16602 (post-2026 reset). Inline for self-containment.
 const zgGalileo = {
@@ -99,8 +100,10 @@ export function buildAgentInfoCache(
           cache.set(key, null);
           return null;
         }
-        cache.set(key, info);
-        return info;
+        const override = staticVaultOverride(tokenId);
+        const patched = override ? { ...info, vaultBase: override } : info;
+        cache.set(key, patched);
+        return patched;
       } catch {
         cache.set(key, null);
         return null;

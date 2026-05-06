@@ -19,6 +19,9 @@ import type { AgentDetail } from "@/lib/agents";
 import { infer, type InferResult, type PaymentReceipt } from "@/lib/operator";
 import { sampleContracts } from "@/lib/sample-contracts";
 import { formatUsdc, shortAddr } from "@/lib/format";
+import { InferenceOutput } from "@/components/inference-output";
+import { Crumb } from "@/components/crumb";
+import { Rail } from "@/components/rail";
 
 interface Props {
   agent: AgentDetail;
@@ -29,7 +32,20 @@ type PayToken = "USDC" | "ETH";
 type Phase = "lock" | "break" | "chip" | "receipt";
 
 const BASE_CHAIN_ID = baseSepolia.id;
-const ETH_AMOUNT_IN_MAX = parseEther("0.001");
+/** ETH→USDC max-in scales with the agent's per-call price.
+ *  ETH ≈ $2400 testnet → 1 ETH ≈ 2_400_000_000 USDC-smallest.
+ *  Use a 4× safety multiplier on top so slippage + price-shift never reverts.
+ *  Uniswap refunds the unused portion via refundETH(), so over-sizing is free. */
+function ethMaxForUsdc(perCallUsdcSmallest: bigint): bigint {
+  // (perCallUsdcSmallest * 4 * 1e18) / (2400 * 1e6)
+  // = perCallUsdcSmallest * 4 * 1e12 / 2400
+  // Order to avoid underflow: multiply first, divide last.
+  const numerator = perCallUsdcSmallest * 4n * 10n ** 12n;
+  const eth = numerator / 2400n;
+  // Floor at 0.001 ETH so tiny per-call values still get a usable max.
+  const floor = parseEther("0.001");
+  return eth > floor ? eth : floor;
+}
 
 export function SubscribeClient({ agent }: Props) {
   const { address, isConnected } = useAccount();
@@ -47,6 +63,8 @@ export function SubscribeClient({ agent }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<InferResult | null>(null);
   const [paidTxHash, setPaidTxHash] = useState<Hex | null>(null);
+  const [pollStartedAt, setPollStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
   const subscriber: Hex = address ?? "0x0000000000000000000000000000000000000000";
 
@@ -65,8 +83,9 @@ export function SubscribeClient({ agent }: Props) {
   });
 
   const price = agent.perCallUsdc;
+  const ethMax = ethMaxForUsdc(price);
   const hasUsdc = usdcBalance !== undefined && usdcBalance >= price;
-  const hasEth = ethBalance !== undefined && ethBalance.value >= ETH_AMOUNT_IN_MAX;
+  const hasEth = ethBalance !== undefined && ethBalance.value >= ethMax;
 
   const { writeContractAsync, data: txHash } = useWriteContract();
   const { isLoading: txPending, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
@@ -79,6 +98,16 @@ export function SubscribeClient({ agent }: Props) {
     void submitToOperator(txHash);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txConfirmed, txHash]);
+
+  // Live tick during the poll phase so the UI doesn't look frozen.
+  useEffect(() => {
+    if (!pollStartedAt) {
+      setElapsed(0);
+      return;
+    }
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - pollStartedAt) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [pollStartedAt]);
 
   async function runAudit() {
     if (!input.trim() || !address) return;
@@ -112,6 +141,10 @@ export function SubscribeClient({ agent }: Props) {
           functionName: "transfer",
           args: [agent.contracts.vault, price],
           chainId: BASE_CHAIN_ID,
+          // Pin gas to bypass Base Sepolia public RPC's flaky estimateGas
+          // (returns "exceeds max transaction gas limit" instead of an
+          // estimate). USDC.transfer is ~50k gas; 200k is safe.
+          gas: 200_000n,
         });
       } else {
         const swapData = encodeFunctionData({
@@ -124,7 +157,7 @@ export function SubscribeClient({ agent }: Props) {
               fee: UNISWAP_BASE_SEPOLIA.fee,
               recipient: agent.contracts.vault,
               amountOut: price,
-              amountInMaximum: ETH_AMOUNT_IN_MAX,
+              amountInMaximum: ethMax,
               sqrtPriceLimitX96: 0n,
             },
           ],
@@ -139,8 +172,12 @@ export function SubscribeClient({ agent }: Props) {
           abi: swapRouter02Abi,
           functionName: "multicall",
           args: [[swapData, refundData]],
-          value: ETH_AMOUNT_IN_MAX,
+          value: ethMax,
           chainId: BASE_CHAIN_ID,
+          // Pin gas — Uniswap V3 multicall (exactOutputSingle + refundETH)
+          // is ~250-350k gas. 600k headroom. Bypasses Base Sepolia RPC's
+          // estimateGas quirk that throws "exceeds max transaction gas limit".
+          gas: 600_000n,
         });
       }
       setPaidTxHash(hash);
@@ -156,6 +193,7 @@ export function SubscribeClient({ agent }: Props) {
     setStep(3);
     setPhase("break");
     setErrorMsg(null);
+    setPollStartedAt(Date.now());
     const receipt: PaymentReceipt = {
       txHash: hash,
       facilitator: "chain",
@@ -170,6 +208,17 @@ export function SubscribeClient({ agent }: Props) {
         subscriber,
         paymentReceipt: receipt,
       });
+      if (!r.ok) {
+        // Surface poll errors / 402 / non-ok responses as a real error message
+        // instead of silently advancing to step 4 with no receipt.
+        const msg = r.kind === "payment-required"
+          ? "operator says payment is missing — try again with a fresh tx"
+          : r.message;
+        setErrorMsg(`agent did not return: ${msg}`);
+        setStep(2);
+        setPhase("lock");
+        return;
+      }
       setResult(r);
       setPhase("receipt");
       setStep(4);
@@ -179,6 +228,7 @@ export function SubscribeClient({ agent }: Props) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+      setPollStartedAt(null);
     }
   }
 
@@ -200,23 +250,26 @@ export function SubscribeClient({ agent }: Props) {
 
   return (
     <>
-      {/* breadcrumb */}
-      <div className="crumb">
-        <Link href="/">markets</Link> <span className="muted">/</span>{" "}
-        <Link href={`/agent/${agent.ticker}`}>{agent.ticker}</Link>{" "}
-        <span className="muted">/</span> <span className="acc">subscribe</span>
-        <span style={{ float: "right", color: "var(--mute-2)" }}>
-          x402 endpoint <span className="fg2">/x402/infer · {agent.perCallHuman}</span> · price-locked
-        </span>
-      </div>
+      <Crumb
+        path={
+          <>
+            ~/<Link href="/">markets</Link> · <Link href={`/agent/${agent.ticker}`}>{agent.ticker}</Link> ·{" "}
+            <b style={{ color: "var(--fg)" }}>subscribe</b>
+          </>
+        }
+        right={
+          <>
+            x402 endpoint <span className="fg2">/x402/infer · {agent.perCallHuman}</span> · price-locked
+          </>
+        }
+      />
 
-      {/* STEPPER */}
-      <section className="stepper">
-        <Step n={1} title="draft inference" meta="prompt + tools + budget" current={step} />
-        <Step n={2} title="x402 settlement" meta="usdc direct · or eth via uniswap" current={step} />
-        <Step n={3} title="tee inference" meta="0g compute · sealed bundle" current={step} />
-        <Step n={4} title="attestation" meta="tx · bundle · attest hash" current={step} />
-      </section>
+      <div style={{ marginBottom: 18 }}>
+        <Rail
+          steps={["compose", "pay", "run", "receipt"]}
+          current={step - 1}
+        />
+      </div>
 
       {!isConnected ? (
         <div className="panel" style={{ marginTop: 14, padding: "12px 14px", borderColor: "var(--amber)", color: "var(--amber)", fontSize: 12 }}>
@@ -236,11 +289,15 @@ export function SubscribeClient({ agent }: Props) {
         <div className="work-l">
           <div className="work-section">
             <h3>
-              01 · compose request{" "}
+              01 · what do you want the agent to do{" "}
               <span className="muted" style={{ float: "right" }}>
-                to {agent.ticker} · {agent.ens}
+                sent to {agent.ticker} · {agent.ens}
               </span>
             </h3>
+            <div className="muted" style={{ marginBottom: 8, fontSize: 14 }}>
+              Plain text. The agent reads this in the same way every other agent on this site does —
+              system prompt + your input → its tools → final answer.
+            </div>
             <textarea
               className="req"
               value={input}
@@ -260,18 +317,20 @@ export function SubscribeClient({ agent }: Props) {
                   preset: {s.label}
                 </button>
               ))}
-              <span className="pill">memory: persistent</span>
-              <span className="pill">budget: {agent.perCallHuman} + a→a</span>
             </div>
           </div>
 
           <div className="work-section">
             <h3>
-              02 · payment{" "}
-              <span className="muted" style={{ float: "right" }}>
-                x402 challenge from operator
-              </span>
+              02 · how you&apos;ll pay
             </h3>
+            <div className="muted" style={{ marginBottom: 10, fontSize: 14 }}>
+              The operator will return a <code>402 Payment Required</code> with the agent&apos;s
+              vault address and the price. Both options below put exactly{" "}
+              <span className="acc">{agent.perCallHuman} USDC</span> into that vault in one transaction;
+              the operator&apos;s validator then finds the matching{" "}
+              <code>USDC.Transfer → vault</code> log and accepts payment. No facilitator, no escrow.
+            </div>
             <div className="pay-grid">
               <button
                 type="button"
@@ -279,14 +338,14 @@ export function SubscribeClient({ agent }: Props) {
                 onClick={() => setPayToken("USDC")}
               >
                 <div className="h">
-                  <span className="t">usdc · direct</span>
-                  <span className="badge">erc-20</span>
+                  <span className="t">pay USDC directly</span>
+                  <span className="badge">simplest</span>
                 </div>
                 <div className="body">
-                  <div className="row"><span className="k">unit price</span><span>{agent.perCallHuman} usdc</span></div>
-                  <div className="row"><span className="k">total debit</span><span className="acc">{agent.perCallHuman} usdc</span></div>
+                  <div className="row"><span className="k">price</span><span>{agent.perCallHuman} USDC</span></div>
                   <div className="row"><span className="k">your balance</span><span>{usdcBalance !== undefined ? `$${formatUsdc(usdcBalance, 2)}` : "—"}</span></div>
-                  <div className="row"><span className="k">network fee</span><span>~$0.0003</span></div>
+                  <div className="row"><span className="k">tx</span><span>one transfer to the vault</span></div>
+                  <div className="row"><span className="k">gas</span><span>~$0.0003</span></div>
                 </div>
               </button>
               <button
@@ -295,49 +354,44 @@ export function SubscribeClient({ agent }: Props) {
                 onClick={() => setPayToken("ETH")}
               >
                 <div className="h">
-                  <span className="t">eth · uniswap v3</span>
-                  <span className="badge">pay-with-eth</span>
+                  <span className="t">pay ETH → swap to USDC</span>
+                  <span className="badge">no USDC needed</span>
                 </div>
                 <div className="body">
-                  <div className="row"><span className="k">quote</span><span>~0.0004 eth</span></div>
-                  <div className="row"><span className="k">→ usdc</span><span>{agent.perCallHuman}</span></div>
-                  <div className="row"><span className="k">slippage</span><span>0.30%</span></div>
-                  <div className="row"><span className="k">route</span><span className="acc">eth/usdc · 0.30%</span></div>
+                  <div className="row"><span className="k">you send</span><span>~0.0004 ETH</span></div>
+                  <div className="row"><span className="k">vault receives</span><span>{agent.perCallHuman} USDC</span></div>
+                  <div className="row"><span className="k">how</span><span>Uniswap V3 → vault</span></div>
+                  <div className="row"><span className="k">unused ETH</span><span>refunded automatically</span></div>
                 </div>
               </button>
             </div>
 
             <div className="route">
-              <span className="leg">your eth</span>
-              <div className="arrow"><span className="pool">v3 0.30% · base-sepolia</span></div>
-              <span className="leg">vault usdc</span>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12, fontSize: 11, color: "var(--mute)" }}>
-              <span className="pill ok">price-locked · 30s</span>
-              <span className="pill">uni v3 · WETH/USDC pool</span>
-              <span className="pill">refund-on-fail guaranteed</span>
+              <span className="leg">your wallet</span>
+              <div className="arrow"><span className="pool">{payToken === "ETH" ? "uniswap v3 · base sepolia" : "USDC.transfer"}</span></div>
+              <span className="leg">{agent.ticker} vault</span>
             </div>
           </div>
 
-          <div className="nav-btns">
-            <span className="why">
-              {paidTxHash ? (
-                <>tx <code className="acc">{shortAddr(paidTxHash, 6)}</code> · operator validating</>
-              ) : (
-                "submitting will issue an x402 challenge, then settle on base-sepolia."
-              )}
-            </span>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button className="btn ghost" onClick={reset} disabled={busy}>
+          <div style={{ marginTop: 14 }}>
+            <button
+              className={"mint-btn" + (busy ? " busy" : "")}
+              onClick={result?.ok ? reset : runAudit}
+              disabled={!isConnected || !input.trim() || busy}
+            >
+              {submitLabel}
+              {!busy ? <span className="ar">→</span> : null}
+            </button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 13, color: "var(--mute)" }}>
+              <span>
+                {paidTxHash ? (
+                  <>paid in tx <code className="acc">{shortAddr(paidTxHash, 6)}</code> — operator is verifying the log walk now…</>
+                ) : (
+                  "click submit → wallet pops up → tx confirms on base sepolia → agent runs in TEE → response below"
+                )}
+              </span>
+              <button className="btn ghost" onClick={reset} disabled={busy} style={{ height: 24, padding: "0 8px", fontSize: 12 }}>
                 reset
-              </button>
-              <button
-                className="btn primary"
-                onClick={result?.ok ? reset : runAudit}
-                disabled={!isConnected || !input.trim() || busy}
-              >
-                {submitLabel}
               </button>
             </div>
           </div>
@@ -351,16 +405,36 @@ export function SubscribeClient({ agent }: Props) {
         {/* RIGHT: sealed envelope stage */}
         <div className="work-r">
           <div className="seal-stage">
-            <h3>tee · sealed envelope</h3>
+            <h3>what&apos;s happening inside the operator</h3>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+              Each stage matches a real step on the server. The model itself is running inside
+              an Intel TDX enclave; the response comes back signed.
+            </div>
             <div className="stages">
-              <Stage name="lock" label="lock" icon="[#]" current={phase} />
-              <Stage name="break" label="seal break" icon="[/]" current={phase} />
-              <Stage name="chip" label="attest chip" icon="[✓]" current={phase} />
-              <Stage name="receipt" label="receipt" icon="[≡]" current={phase} />
+              <Stage name="lock" label="bundle the call" icon="[#]" current={phase} />
+              <Stage name="break" label="ship to enclave" icon="[/]" current={phase} />
+              <Stage name="chip" label="model signs reply" icon="[✓]" current={phase} />
+              <Stage name="receipt" label="receipt back to you" icon="[≡]" current={phase} />
             </div>
             <div className="seal-anim">
               <pre dangerouslySetInnerHTML={{ __html: FRAMES[phase](agent) }} />
             </div>
+            {pollStartedAt && !result ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "8px 12px",
+                  border: "1px solid rgba(16,185,129,0.30)",
+                  background: "rgba(16,185,129,0.04)",
+                  borderRadius: 3,
+                  fontSize: 14,
+                  color: "var(--fg-2)",
+                }}
+              >
+                <span className="acc">⏱ {elapsed}s</span>
+                {" · waiting on operator. hermes can take 30–90s for multi-tool runs (cross-agent calls + on-chain reads). will time out at 180s if nothing comes back."}
+              </div>
+            ) : null}
           </div>
 
           {step === 4 && result?.ok ? (
@@ -423,15 +497,17 @@ function ReceiptBlock({
   return (
     <div className="attest-receipt">
       <div className="head">
-        <span className="t">tee attested · sealed inference verified</span>
-        <span className="muted" style={{ fontSize: 10 }}>
+        <span className="t">response signed by the model · proof returned</span>
+        <span className="muted" style={{ fontSize: 13 }}>
           {r.computeBackend ?? "operator"}
         </span>
       </div>
-      <h2>signed by the machine.</h2>
+      <h2>response is back. signed by the model.</h2>
       <div className="body">
-        model weights never left the enclave. response was generated, signed, and returned with a
-        teeml attestation chained to the sealed bundle hash. agent vault debited {agent.perCallHuman}.
+        Below is the agent&apos;s answer. The signature recovers to the on-chain TEE signer
+        address — that&apos;s how we know the response came out of the enclave and wasn&apos;t
+        forged. The agent&apos;s vault is now {agent.perCallHuman} richer; that USDC will flow to
+        shareholders next time someone snaps the vault.
       </div>
 
       <div className="grid">
@@ -465,9 +541,7 @@ function ReceiptBlock({
 
       <div className="out">
         <h4>response</h4>
-        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "var(--fg-2)" }}>
-          {tryFormatJson(result.output)}
-        </pre>
+        <InferenceOutput raw={result.output} />
       </div>
     </div>
   );

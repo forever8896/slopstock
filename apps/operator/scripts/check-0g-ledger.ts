@@ -6,7 +6,7 @@
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
 import { ethers } from "ethers";
-import { createZGComputeNetworkBroker } from "@0glabs/0g-serving-broker";
+import { createZGComputeNetworkBroker } from "@0gfoundation/0g-compute-ts-sdk";
 import { loadConfig } from "../src/config.ts";
 
 async function main() {

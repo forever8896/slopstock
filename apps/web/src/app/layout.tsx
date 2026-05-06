@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import Image from "next/image";
 import { JetBrains_Mono } from "next/font/google";
 import { Masthead } from "@/components/masthead";
 import { TickerTape } from "@/components/ticker-tape";
+import { SystemBar } from "@/components/system-bar";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -29,17 +29,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <Masthead />
           <TickerTape />
           <main className="page">{children}</main>
-          <footer className="foot page" style={{ paddingTop: 18 }}>
-            <div className="seal">
-              <span className="dot" />
-              <span>session sealed · base-sepolia + 0g-galileo</span>
-            </div>
-            <div>build 0.3.18 · stratum protocol</div>
-            <div className="foot-brand">
-              <Image src="/slopstock-logo.png" alt="" width={14} height={14} />
-              <span>slopstock</span>
-            </div>
-          </footer>
+          <SystemBar />
         </Providers>
       </body>
     </html>

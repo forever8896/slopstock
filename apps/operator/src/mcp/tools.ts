@@ -19,6 +19,7 @@ import type { RuntimeRouter } from "../runtime/index.ts";
 import { priceForToken } from "../runtime/pricing.ts";
 import { findReceipt, recordReceipt } from "../store/receipts.ts";
 import { agentNftAbi, agentRegistryAbi } from "../chain/abis.ts";
+import { staticVaultOverride } from "../chain/static-vaults.ts";
 
 // ─── Input schemas ───────────────────────────────────────────────────────────
 
@@ -146,6 +147,11 @@ export async function handleProfile(args: z.infer<typeof profileInput>, deps: To
   const pricing = priceForToken(tokenId);
   const runtimeKind = (await deps.runtimes.forToken(tokenId)).kind;
 
+  // AgentRegistry entries are immutable; static-vaults overrides AUDIT/MEMER/
+  // ORCL whose original vaults were bound to Circle USDC instead of TestnetUSDC.
+  const vaultOverride = staticVaultOverride(tokenId);
+  const vaultBase = vaultOverride ?? info.vaultBase;
+
   return {
     tokenId: tokenId.toString(),
     name: ensName,
@@ -161,7 +167,7 @@ export async function handleProfile(args: z.infer<typeof profileInput>, deps: To
     },
     operator: info.operator,
     shareToken: info.shareToken,
-    vaultBase: info.vaultBase,
+    vaultBase,
     ensName,
     expectedTeeMeasurement: measurement,
   };

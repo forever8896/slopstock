@@ -73,11 +73,17 @@ export interface AgentAddresses {
 /**
  * Per-agent Base-side bundle. Keyed by ticker.
  */
+// Vaults redeployed 2026-05-06 — original three were bound to Circle USDC, but
+// the operator's x402 settlement + the Uniswap V3 pool route TestnetUSDC.
+// Result: every payment ended up as a stranded TestnetUSDC balance the vault
+// couldn't recognise (paymentAsset is immutable). Fresh vaults below are bound
+// to TestnetUSDC. AgentRegistry is one-shot, so the operator layers a static
+// override (apps/operator/src/chain/static-vaults.ts) for the x402 challenge.
 export const BASE_SEPOLIA_AGENTS: Record<string, AgentAddresses> = {
   AUDIT: {
     tokenId: 1n,
     shareToken: "0xC257DEe33f2a709aA72Acb4Da2f657C4eb7DC0Fa",
-    revenueVault: "0x01667C0D76b84d6cd63C82500141340bAf0c18ce",
+    revenueVault: "0x67826ded1ff988eb2711b5ad6bd2752a311893b9",
     ipoSale: "0x4563a1F9Ba44C226bb378Ed33aC997CcB423D45d",
     ensName: "auditor.slopstock.eth",
     baseDeployBlock: 40776566n,
@@ -86,20 +92,21 @@ export const BASE_SEPOLIA_AGENTS: Record<string, AgentAddresses> = {
   MEMER: {
     tokenId: 2n,
     shareToken: "0x1F2147265b104DE7b5f2C496cD19817cD8659e98",
-    revenueVault: "0x0f33F116992C6C470BB3bD7cC72Cf6891c84b1d5",
+    revenueVault: "0xfa346f885728108a5911739d9237adee253b4bda",
     ipoSale: "0x4a0a6166105e90490EF9918019712d24252c0A5A",
     ensName: "memer.slopstock.eth",
     baseDeployBlock: 40815273n,
-    runtime: "openai-compat",
+    runtime: "hermes",
   },
   ORCL: {
     tokenId: 3n,
     shareToken: "0xa45823362dDE120B83BFe565dcB6bE42DF49c6D2",
-    revenueVault: "0xE8e3b5384cd6ac4e882B9eaB9D9181eCE535C734",
-    ipoSale: "0x6Cf139016A35Bf76e052a5B9a282194bAB110324",
+    revenueVault: "0x1c1fa59c0b6e631a47c7ec4717af3a0b7bfdb382",
+    // IPO redeployed same day — old IPO had Circle-USDC mismatch + expired window.
+    ipoSale: "0x85296f508c949837a1f0fe61f337fb204b25377b",
     ensName: "oracles.slopstock.eth",
     baseDeployBlock: 40818130n,
-    runtime: "openai-compat",
+    runtime: "hermes",
   },
 };
 

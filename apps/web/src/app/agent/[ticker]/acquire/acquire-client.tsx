@@ -14,7 +14,7 @@ import {
 import { baseSepolia } from "wagmi/chains";
 import { parseUnits } from "viem";
 import { erc20Abi, ipoSaleAbi } from "@stratum/contracts-types";
-import { CIRCLE_USDC_BASE_SEPOLIA } from "@stratum/shared";
+import { USDC_BASE_SEPOLIA } from "@stratum/shared";
 import type { AgentDetail } from "@/lib/agents";
 import { formatShares, formatUsdc, pctOf, relativeTime, shortAddr } from "@/lib/format";
 
@@ -48,7 +48,7 @@ export function AcquireClient({ agent }: Props) {
 
   // Mirror the cap-table reads from the agent loader.
   const { data: usdcBalance, refetch: refetchUsdc } = useReadContract({
-    address: CIRCLE_USDC_BASE_SEPOLIA,
+    address: USDC_BASE_SEPOLIA,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
@@ -56,7 +56,7 @@ export function AcquireClient({ agent }: Props) {
     query: { enabled: Boolean(address) },
   });
   const { data: usdcAllowance, refetch: refetchAllowance } = useReadContract({
-    address: CIRCLE_USDC_BASE_SEPOLIA,
+    address: USDC_BASE_SEPOLIA,
     abi: erc20Abi,
     functionName: "allowance",
     args: address ? [address, agent.contracts.ipoSale] : undefined,
@@ -146,11 +146,12 @@ export function AcquireClient({ agent }: Props) {
       if (!usdcAllowance || usdcAllowance < costSmallest) {
         setPendingAction("approve");
         await writeContractAsync({
-          address: CIRCLE_USDC_BASE_SEPOLIA,
+          address: USDC_BASE_SEPOLIA,
           abi: erc20Abi,
           functionName: "approve",
           args: [agent.contracts.ipoSale, costSmallest],
           chainId: BASE_CHAIN_ID,
+          gas: 100_000n,
         });
         await new Promise((r) => setTimeout(r, 1500));
       }
@@ -163,6 +164,7 @@ export function AcquireClient({ agent }: Props) {
         functionName: "buy",
         args: [sharesWei],
         chainId: BASE_CHAIN_ID,
+        gas: 400_000n,
       });
 
       setSynthRows((r) =>
@@ -210,12 +212,16 @@ export function AcquireClient({ agent }: Props) {
       <section className="ipo-hero">
         <div className="ipo-h1">
           <span className="tk">{agent.ticker}</span>
-          <span className="ens">{agent.ens} · ipo · primary issuance</span>
+          <span className="ens">{agent.ens} · share IPO</span>
           <span className={`pill ${agent.ipo.isOpen ? "ok" : ""}`}>● {agent.ipo.isOpen ? "open" : "closed"}</span>
           <span className="pill">
             {agent.ipo.isOpen ? `closes ${relativeTime(agent.ipo.endsAt)}` : `closed ${relativeTime(agent.ipo.endsAt)}`}
           </span>
-          <span className="pill warn">price-locked</span>
+        </div>
+        <div style={{ color: "var(--fg-2)", fontSize: 15, marginTop: 4, marginBottom: 14 }}>
+          You pay USDC, the creator receives it, you receive ERC-20 shares of {agent.ticker}.
+          From this block forward, every snap of the agent&apos;s vault pays you a slice of the
+          revenue weighted by how many shares you hold.
         </div>
 
         <div className="fundraise">
@@ -264,12 +270,16 @@ export function AcquireClient({ agent }: Props) {
       <section className="acq-grid">
         <div className="qty-box">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <h3 style={{ margin: 0, fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--mute)", fontWeight: 500 }}>
-              acquire · primary fill
+            <h3 style={{ margin: 0, fontSize: 14, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--mute)", fontWeight: 500 }}>
+              pick how many shares you want
             </h3>
-            <span className="muted" style={{ fontSize: 11 }}>
-              filling against share contract {shortAddr(agent.contracts.shareToken, 6)}
+            <span className="muted" style={{ fontSize: 14 }}>
+              fills against {shortAddr(agent.contracts.shareToken, 6)}
             </span>
+          </div>
+          <div className="muted" style={{ fontSize: 14, marginTop: 6 }}>
+            Two transactions: approve USDC → buy. The IPOSale contract pulls your USDC,
+            transfers shares to you in the same call, never custodies anything.
           </div>
 
           <div style={{ marginTop: 14 }}>
@@ -307,10 +317,8 @@ export function AcquireClient({ agent }: Props) {
             </div>
           </div>
 
-          <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: "var(--mute)" }}>
-            <span className="pill">erc-20 minted to msg.sender</span>
-            <span className="pill">pro-rata revenue from block n+1</span>
-            <span className="pill ok">tee-attested vault</span>
+          <div style={{ marginTop: 14, fontSize: 14, color: "var(--mute)", lineHeight: 1.55 }}>
+            shares hit your wallet in the same tx · you start earning revenue from the next snap
           </div>
 
           <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap", alignItems: "center" }}>
@@ -360,11 +368,11 @@ export function AcquireClient({ agent }: Props) {
         <div className="panel">
           <div className="panel-head">
             <div className="lhs">
-              <span>acquire event log</span>
-              <span className="tag muted">live · onchain</span>
+              <span>fills · streaming live</span>
+              <span className="tag muted">every Bought event from the IPOSale contract</span>
             </div>
             <div className="rhs">
-              <span className="pill ok">streaming</span>
+              <span className="pill ok">live</span>
             </div>
           </div>
           <div className="blotter">

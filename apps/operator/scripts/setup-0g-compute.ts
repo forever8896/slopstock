@@ -19,7 +19,7 @@
  */
 
 import { ethers } from "ethers";
-import { createZGComputeNetworkBroker } from "@0glabs/0g-serving-broker";
+import { createZGComputeNetworkBroker } from "@0gfoundation/0g-compute-ts-sdk";
 import { loadConfig } from "../src/config.ts";
 
 // Hardcoded TeeML provider on 0G Galileo testnet — published in the

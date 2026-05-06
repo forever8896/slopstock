@@ -9,7 +9,7 @@
  *
  *   Compute backend (where the LLM call physically goes):
  *     - openai-compat: HTTP to any OpenAI-shaped endpoint (Ollama / OpenRouter / …)
- *     - 0g-compute:    routed through @0glabs/0g-serving-broker for sealed,
+ *     - 0g-compute:    routed through @0gfoundation/0g-compute-ts-sdk for sealed,
  *                      TeeML-verified inference inside an Intel TDX (or H100/H200)
  *                      enclave
  *
@@ -79,9 +79,11 @@ class DefaultRuntimeRouter implements RuntimeRouter {
       }
 
       // Real-Agent Launch: if this dynamic agent was minted with a manifest,
-      // route to the tools-lite runtime so it gets a real tool loop. Hermes
-      // tier in Phase 2 will route here too; for Phase 1 we down-route hermes
-      // tier to tools-lite so the demo arc never blocks on full Hermes.
+      // route to the appropriate tier:
+      //   - tools-lite: per-call agent loop, ephemeral memory
+      //   - hermes:     full hermes — persistent memory, skill auto-creation,
+      //                 the same runtime AUDIT uses (with the manifest dir
+      //                 swapped in for the seed dir)
       if (dyn.bundleManifestCid && dyn.runtimeTier && dyn.runtimeTier !== "openai-compat") {
         try {
           const materialized = await loadAndMaterialize({
@@ -90,6 +92,15 @@ class DefaultRuntimeRouter implements RuntimeRouter {
             ...(dyn.manifestShadow ? { manifestShadow: dyn.manifestShadow } : {}),
             dataDir: this.config.AGENTS_DATA_DIR,
           });
+          if (dyn.runtimeTier === "hermes") {
+            const h = new HermesAgentRuntime(this.config, dynBackend);
+            if (this.clients) h.attachOperatorContext(this.clients);
+            h.withManifest({
+              agentDir: materialized.agentDir,
+              tools: [...materialized.manifest.capabilities.tools],
+            });
+            return h;
+          }
           return new ToolsLiteRuntime(dynBackend, {
             manifest: materialized,
             config: this.config,

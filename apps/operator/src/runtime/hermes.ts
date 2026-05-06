@@ -85,6 +85,9 @@ interface AgentState {
   systemPrompt: string;
   skills: SkillDoc[];
   lock: BundleLock;
+  /** Tool whitelist (manifest-driven). Undefined = no whitelist (legacy
+   *  static-trio behavior; full TOOL_REGISTRY is exposed). */
+  tools?: string[];
 }
 
 export interface SkillDoc {
@@ -92,6 +95,14 @@ export interface SkillDoc {
   filename: string;   // skills/<name>.md
   frontmatter: Record<string, string>;
   body: string;       // Markdown body
+}
+
+export interface HermesManifestOverride {
+  /** Pre-materialized bundle dir from manifest-loader. Hermes reads
+   *  system.md / patterns / skills from here instead of the seed path. */
+  agentDir: string;
+  /** Tool whitelist from the manifest's capabilities.tools. */
+  tools: string[];
 }
 
 export class HermesAgentRuntime implements AgentRuntime {
@@ -104,6 +115,10 @@ export class HermesAgentRuntime implements AgentRuntime {
    *  the agent-to-agent `query_agent` tool has somewhere to send payments. */
   private clients?: Clients;
   private peerOperatorUrl: string;
+  /** When set, load() reads from this dir instead of dirFor(tokenId) and
+   *  exposes only the listed tools. Set by the router for permissionless
+   *  hermes-tier mints (Real-Agent Launch). */
+  private manifestOverride?: HermesManifestOverride;
 
   constructor(
     private readonly config: OperatorConfig,
@@ -120,21 +135,37 @@ export class HermesAgentRuntime implements AgentRuntime {
     if (peerOperatorUrl) this.peerOperatorUrl = peerOperatorUrl;
   }
 
+  /** Opt-in: load from a manifest-materialized dir instead of the seed path.
+   *  Used for permissionless mints at hermes tier. AUDIT and other static-
+   *  trio agents do NOT call this — their behavior is unchanged. */
+  withManifest(override: HermesManifestOverride): this {
+    this.manifestOverride = override;
+    return this;
+  }
+
   async load(opts: { tokenId: bigint }): Promise<void> {
     const key = opts.tokenId.toString();
     if (this.stateByToken.has(key)) return;
 
-    const dir = this.dirFor(opts.tokenId);
+    // Two paths:
+    //   - Manifest-driven (permissionless mint at hermes tier): the
+    //     manifest-loader has already populated /tmp/operator-bundles/<id>/
+    //     with system.md, patterns/, skills/ from the pinned manifest. We
+    //     just point at it. No seed copy needed.
+    //   - Static (AUDIT / seed path): use AGENTS_DATA_DIR/<id>/ and copy
+    //     from apps/operator/seed/agents/<id>/ on first run.
+    const dir = this.manifestOverride?.agentDir ?? this.dirFor(opts.tokenId);
     await mkdir(join(dir, "skills"), { recursive: true });
     await mkdir(join(dir, "patterns"), { recursive: true });
 
-    // First-run seeding: if a seed bundle exists for this tokenId under
-    // apps/operator/seed/agents/<tokenId>/, copy any files we don't already
-    // have on disk. Lets us check in starter system.md / patterns / skills
-    // without conflating them with runtime state.
-    const seedDir = join(SEED_ROOT, key);
-    if (existsSync(seedDir)) {
-      await cp(seedDir, dir, { recursive: true, force: false, errorOnExist: false });
+    if (!this.manifestOverride) {
+      const seedDir = join(SEED_ROOT, key);
+      if (existsSync(seedDir)) {
+        // force:true so seed updates (e.g. system.md prompt revisions) actually
+        // propagate to existing data dirs on next boot. memory.db, bundle.lock,
+        // and auto-created skills aren't in seed → cp leaves them untouched.
+        await cp(seedDir, dir, { recursive: true, force: true, errorOnExist: false });
+      }
     }
 
     // System prompt
@@ -193,7 +224,14 @@ export class HermesAgentRuntime implements AgentRuntime {
     }
     await writeFile(lockPath, JSON.stringify(lock, null, 2));
 
-    this.stateByToken.set(key, { dir, db, systemPrompt, skills, lock });
+    this.stateByToken.set(key, {
+      dir,
+      db,
+      systemPrompt,
+      skills,
+      lock,
+      ...(this.manifestOverride ? { tools: this.manifestOverride.tools } : {}),
+    });
   }
 
   async bundleHash(tokenId: bigint): Promise<Hex> {
@@ -210,9 +248,15 @@ export class HermesAgentRuntime implements AgentRuntime {
     const result = await this.loop.runAgentLoop({
       config: this.config,
       backend: this.backend,
-      state,
+      state: {
+        dir: state.dir,
+        db: state.db,
+        systemPrompt: state.systemPrompt,
+        skills: state.skills,
+        ...(state.tools ? { tools: state.tools } : {}),
+      },
       req,
-      clients: this.clients,
+      ...(this.clients ? { clients: this.clients } : {}),
       peerOperatorUrl: this.peerOperatorUrl,
     });
 

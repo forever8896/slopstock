@@ -25,13 +25,17 @@ import type { ReceiptSigner } from "../compute/receipt.ts";
 import type { OperatorConfig } from "../config.ts";
 import { handleProfile } from "../mcp/tools.ts";
 import {
+  attachEnsName,
   attachFinance,
+  deleteDynamicAgent,
   getDynamicAgent,
   listDynamicAgents,
   registerDynamicAgent,
   type DynamicAgent,
 } from "../store/dynamic-registry.ts";
+import { recoverMessageAddress, type Hex } from "viem";
 import { deployFinanceStack } from "../store/finance-deploy.ts";
+import { registerSubname } from "../store/ens-subname.ts";
 import type { RuntimeRouter } from "../runtime/index.ts";
 import { RuntimeError } from "../runtime/index.ts";
 import { listReceipts, recordReceipt } from "../store/receipts.ts";
@@ -59,9 +63,72 @@ export interface HttpDeps {
   agentRegistryAddress: `0x${string}`;
 }
 
+/**
+ * In-memory tracking of in-flight x402 inference calls. /x402/infer kicks
+ * off the runtime asynchronously and returns immediately with a callId; the
+ * client polls /x402/calls/:callId until status flips. Sidesteps the
+ * Railway proxy's 60s HTTP timeout for slow paths (mainnet TEE + cross-
+ * agent x402 + Hermes can run 30-90s; we don't gamble on the proxy).
+ */
+type InFlightState =
+  | { status: "running"; tokenId: string; subscriber: `0x${string}`; startedAt: number }
+  | {
+      status: "complete";
+      output: string;
+      receipt: unknown;
+      callId: string;
+      authorizeUsageTx: `0x${string}` | null;
+      completedAt: number;
+    }
+  | { status: "error"; message: string; completedAt: number };
+
+const inFlight = new Map<string, InFlightState>();
+const INFLIGHT_TTL_MS = 10 * 60 * 1000; // keep results 10 min for polling
+function pruneInFlight(): void {
+  const now = Date.now();
+  for (const [k, v] of inFlight) {
+    const stamp = (v as { startedAt?: number; completedAt?: number }).startedAt ?? (v as { startedAt?: number; completedAt?: number }).completedAt ?? 0;
+    if (stamp && now - stamp > INFLIGHT_TTL_MS) inFlight.delete(k);
+  }
+}
+
+/**
+ * In-memory tracking of in-flight finance deploys (3 sequential contract
+ * deploys on Base Sepolia, ~30-60s total). The web app fires-and-polls so
+ * a flaky proxy / cold network doesn't surface as "Failed to fetch" mid-deploy.
+ *
+ * Keyed by tokenId (string). Idempotent: if a deploy is already running for
+ * a tokenId, repeated POSTs just return the same status.
+ */
+type FinanceDeployState =
+  | { status: "deploying"; tokenId: string; startedAt: number }
+  | {
+      status: "complete";
+      tokenId: string;
+      finance: {
+        shareToken: `0x${string}`;
+        revenueVault: `0x${string}`;
+        ipoSale: `0x${string}`;
+      };
+      txHashes: { shareToken: `0x${string}`; revenueVault: `0x${string}`; ipoSale: `0x${string}` };
+      ens?: { ensName: string; setAddrTx: string; setSubnodeTx: string | null };
+      completedAt: number;
+    }
+  | { status: "error"; tokenId: string; message: string; completedAt: number };
+
+const financeInFlight = new Map<string, FinanceDeployState>();
+function pruneFinanceInFlight(): void {
+  const now = Date.now();
+  for (const [k, v] of financeInFlight) {
+    const stamp = (v as { startedAt?: number; completedAt?: number }).startedAt ?? (v as { startedAt?: number; completedAt?: number }).completedAt ?? 0;
+    // Keep "deploying" entries indefinitely; only TTL terminal states.
+    if (v.status !== "deploying" && stamp && now - stamp > INFLIGHT_TTL_MS) financeInFlight.delete(k);
+  }
+}
+
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, X-PAYMENT-V1-RESPONSE",
   "Access-Control-Expose-Headers": "X-PAYMENT-V1",
 };
@@ -109,6 +176,11 @@ export function startHttpServer(deps: HttpDeps) {
         return withCors(await handleInfer(req, deps));
       }
 
+      const callMatch = url.pathname.match(/^\/x402\/calls\/([0-9a-f-]{36})$/i);
+      if (callMatch && req.method === "GET") {
+        return withCors(handleInferResult(callMatch[1]!));
+      }
+
       if (url.pathname === "/agents/register" && req.method === "POST") {
         return withCors(await handleRegisterAgent(req, deps));
       }
@@ -137,6 +209,14 @@ export function startHttpServer(deps: HttpDeps) {
       const financeMatch = url.pathname.match(/^\/agents\/(\d+)\/deploy-finance$/);
       if (financeMatch && req.method === "POST") {
         return withCors(await handleDeployFinance(financeMatch[1]!, deps));
+      }
+      if (financeMatch && req.method === "GET") {
+        return withCors(await handleDeployFinanceStatus(financeMatch[1]!));
+      }
+
+      const deleteAgentMatch = url.pathname.match(/^\/agents\/(\d+)$/);
+      if (deleteAgentMatch && req.method === "DELETE") {
+        return withCors(await handleDeleteAgent(deleteAgentMatch[1]!, req));
       }
 
       return withCors(new Response("not found", { status: 404 }));
@@ -233,7 +313,71 @@ async function handleRegisterAgent(req: Request, deps: HttpDeps): Promise<Respon
   };
 
   await registerDynamicAgent(record);
-  return json({ ok: true, agent: record });
+
+  // Kick off the Base Sepolia finance stack immediately so it runs in parallel
+  // with whatever the user does next on the /launch page. By the time they
+  // see the "go live" step, ShareToken/RevenueVault/IPOSale are already
+  // deploying — they just poll for completion. Idempotent + safe to retry.
+  startFinanceDeployAsync(record.tokenId, deps);
+
+  return json({ ok: true, agent: record, financeStatus: "deploying" });
+}
+
+/**
+ * Creator-only delete. Body: { signer, signedAt (ms), signature }.
+ * Message format (must match the web client exactly):
+ *   "delete agent <tokenId> at <signedAt>"
+ *
+ * Auth checks:
+ *  1. recoverMessageAddress(signature) === signer
+ *  2. signer.toLowerCase() === agent.creator.toLowerCase()
+ *  3. signedAt within ±5 min of now (replay-window)
+ *
+ * Removes from registry only — on-chain iNFT/vault/IPO/ShareToken stay live.
+ */
+async function handleDeleteAgent(tokenId: string, req: Request): Promise<Response> {
+  let body: { signer?: Hex; signedAt?: number; signature?: Hex };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: "invalid json body" }, { status: 400 });
+  }
+  const { signer, signedAt, signature } = body;
+  if (!signer || !signedAt || !signature) {
+    return json({ error: "missing signer | signedAt | signature" }, { status: 400 });
+  }
+
+  const skewMs = Math.abs(Date.now() - signedAt);
+  if (skewMs > 5 * 60 * 1000) {
+    return json({ error: `signedAt too old/skewed (${Math.round(skewMs / 1000)}s)` }, { status: 400 });
+  }
+
+  const agent = await getDynamicAgent(tokenId);
+  if (!agent) return json({ error: `tokenId ${tokenId} not in dynamic registry` }, { status: 404 });
+
+  const message = `delete agent ${tokenId} at ${signedAt}`;
+  let recovered: Hex;
+  try {
+    recovered = await recoverMessageAddress({ message, signature });
+  } catch (err) {
+    return json(
+      { error: `signature recovery failed: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 400 },
+    );
+  }
+
+  if (recovered.toLowerCase() !== signer.toLowerCase()) {
+    return json({ error: "signature does not match signer" }, { status: 401 });
+  }
+  if (recovered.toLowerCase() !== agent.creator.toLowerCase()) {
+    return json(
+      { error: "only the creator may delete this agent", creator: agent.creator },
+      { status: 403 },
+    );
+  }
+
+  const removed = await deleteDynamicAgent(tokenId);
+  return json({ ok: removed, tokenId });
 }
 
 async function handleOgStoragePin(req: Request, deps: HttpDeps): Promise<Response> {
@@ -296,12 +440,77 @@ async function handleListAgents(): Promise<Response> {
 async function handleDeployFinance(tokenIdStr: string, deps: HttpDeps): Promise<Response> {
   const agent = await getDynamicAgent(tokenIdStr);
   if (!agent) return json({ error: `tokenId ${tokenIdStr} not in dynamic registry — call /agents/register first` }, { status: 404 });
-  if (agent.finance) return json({ ok: true, agent, alreadyDeployed: true });
   if (!deps.config.DEPLOYER_PRIVATE_KEY) {
     return json({ error: "operator missing DEPLOYER_PRIVATE_KEY env" }, { status: 503 });
   }
 
+  // Agent already has finance — return immediately. ENS registration, if
+  // missing, will be picked up the next time the background runner spins.
+  if (agent.finance) {
+    return json({ ok: true, status: "complete", agent, alreadyDeployed: true });
+  }
+
+  // Already in-flight: idempotent — just report status. Avoids double-deploys
+  // when the web client retries on a flaky network.
+  pruneFinanceInFlight();
+  const existing = financeInFlight.get(tokenIdStr);
+  if (existing && existing.status === "deploying") {
+    return json({ ok: true, status: "deploying", agent, sinceMs: Date.now() - existing.startedAt });
+  }
+
+  // Kick off deploy in the BACKGROUND and return immediately. Client polls
+  // GET /agents/:tokenId/deploy-finance until status flips to complete/error.
+  // Sidesteps the ~60s edge-proxy HTTP timeout that surfaces as "Failed to
+  // fetch" in the browser when the 3 sequential Base Sepolia deploys run long.
+  startFinanceDeployAsync(tokenIdStr, deps);
+  return json({ ok: true, status: "deploying", agent });
+}
+
+/**
+ * Idempotent fire-and-forget: starts a finance deploy for the given tokenId
+ * unless one is already in-flight or already complete on the agent record.
+ * Safe to call from /agents/register and /agents/:tokenId/deploy-finance.
+ */
+function startFinanceDeployAsync(tokenIdStr: string, deps: HttpDeps): void {
+  if (!deps.config.DEPLOYER_PRIVATE_KEY) return;
+  const existing = financeInFlight.get(tokenIdStr);
+  if (existing && existing.status === "deploying") return;
+
+  financeInFlight.set(tokenIdStr, {
+    status: "deploying",
+    tokenId: tokenIdStr,
+    startedAt: Date.now(),
+  });
+  void runFinanceDeployAsync(tokenIdStr, deps);
+}
+
+async function runFinanceDeployAsync(tokenIdStr: string, deps: HttpDeps): Promise<void> {
   try {
+    const agent = await getDynamicAgent(tokenIdStr);
+    if (!agent) {
+      financeInFlight.set(tokenIdStr, {
+        status: "error",
+        tokenId: tokenIdStr,
+        message: `tokenId ${tokenIdStr} not in dynamic registry`,
+        completedAt: Date.now(),
+      });
+      return;
+    }
+    if (agent.finance) {
+      financeInFlight.set(tokenIdStr, {
+        status: "complete",
+        tokenId: tokenIdStr,
+        finance: {
+          shareToken: agent.finance.shareToken as `0x${string}`,
+          revenueVault: agent.finance.revenueVault as `0x${string}`,
+          ipoSale: agent.finance.ipoSale as `0x${string}`,
+        },
+        txHashes: { shareToken: "0x" as `0x${string}`, revenueVault: "0x" as `0x${string}`, ipoSale: "0x" as `0x${string}` },
+        completedAt: Date.now(),
+      });
+      return;
+    }
+
     const pricePerShareUsd = ((Number(agent.perCallSmallest) / 1e6) * 10).toFixed(2);
     const result = await deployFinanceStack({
       tokenId: agent.tokenId,
@@ -320,15 +529,80 @@ async function handleDeployFinance(tokenIdStr: string, deps: HttpDeps): Promise<
       maxShares: "100000",
       deployedAt: Math.floor(Date.now() / 1000),
     };
-    const updated = await attachFinance(agent.tokenId, finance);
-    return json({ ok: true, agent: updated, txHashes: result.txHashes });
+    await attachFinance(agent.tokenId, finance);
+
+    // Best-effort ENS subname under slopstock.eth — non-fatal.
+    let ensResult: { ensName: string; setAddrTx: string; setSubnodeTx: string | null } | undefined;
+    try {
+      const reg = await registerSubname({
+        ticker: agent.ticker,
+        vaultAddress: result.revenueVault as `0x${string}`,
+        creator: agent.creator as `0x${string}`,
+        deployerKey: deps.config.DEPLOYER_PRIVATE_KEY as `0x${string}`,
+        sepoliaRpcUrl: deps.config.SEPOLIA_RPC_URL,
+      });
+      await attachEnsName(agent.tokenId, reg.ensName);
+      ensResult = { ensName: reg.ensName, setAddrTx: reg.setAddrTx, setSubnodeTx: reg.setSubnodeTx };
+    } catch (err) {
+      console.warn(
+        `[finance-deploy] ENS subname registration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    financeInFlight.set(tokenIdStr, {
+      status: "complete",
+      tokenId: tokenIdStr,
+      finance: { shareToken: result.shareToken, revenueVault: result.revenueVault, ipoSale: result.ipoSale },
+      txHashes: result.txHashes,
+      ...(ensResult ? { ens: ensResult } : {}),
+      completedAt: Date.now(),
+    });
   } catch (err) {
-    console.error("[finance-deploy] failed:", err);
-    return json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    console.error(`[finance-deploy] tokenId=${tokenIdStr} failed:`, err);
+    financeInFlight.set(tokenIdStr, {
+      status: "error",
+      tokenId: tokenIdStr,
+      message: err instanceof Error ? err.message : String(err),
+      completedAt: Date.now(),
+    });
   }
+}
+
+async function handleDeployFinanceStatus(tokenIdStr: string): Promise<Response> {
+  pruneFinanceInFlight();
+  const state = financeInFlight.get(tokenIdStr);
+  if (state) {
+    if (state.status === "deploying") {
+      return json({ status: "deploying", tokenId: tokenIdStr, sinceMs: Date.now() - state.startedAt });
+    }
+    if (state.status === "complete") {
+      return json({
+        status: "complete",
+        tokenId: tokenIdStr,
+        finance: state.finance,
+        txHashes: state.txHashes,
+        ...(state.ens ? { ens: state.ens } : {}),
+      });
+    }
+    return json({ status: "error", tokenId: tokenIdStr, message: state.message }, { status: 500 });
+  }
+  // Fall back to the persisted registry if the in-memory tracker has no entry
+  // (e.g. operator restarted after a successful deploy).
+  const agent = await getDynamicAgent(tokenIdStr);
+  if (!agent) return json({ status: "not-found" }, { status: 404 });
+  if (agent.finance) {
+    return json({
+      status: "complete",
+      tokenId: tokenIdStr,
+      finance: {
+        shareToken: agent.finance.shareToken,
+        revenueVault: agent.finance.revenueVault,
+        ipoSale: agent.finance.ipoSale,
+      },
+      txHashes: { shareToken: "", revenueVault: "", ipoSale: "" },
+    });
+  }
+  return json({ status: "idle", tokenId: tokenIdStr });
 }
 
 /**
@@ -428,8 +702,19 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const tokenId = typeof rawTokenId === "string" ? BigInt(rawTokenId) : BigInt(rawTokenId);
 
   // Look up vault + price for this specific agent.
-  const info = await deps.agentInfo.forToken(tokenId);
-  const recipient = (info?.vaultBase ?? deps.defaultVaultAddress) as `0x${string}`;
+  // Dynamic agents (permissionless mints) aren't in AgentRegistry on chain
+  // — their vaults live only in the operator's local registry. Check there
+  // FIRST before falling back to chain-side AgentRegistry, otherwise the
+  // x402 challenge gets built against the wrong recipient and every paid
+  // call to a dynamic agent 402s as "tx not paying our vault."
+  const dyn = await getDynamicAgent(tokenId.toString());
+  let recipient: `0x${string}`;
+  if (dyn?.finance?.revenueVault) {
+    recipient = dyn.finance.revenueVault as `0x${string}`;
+  } else {
+    const info = await deps.agentInfo.forToken(tokenId);
+    recipient = (info?.vaultBase ?? deps.defaultVaultAddress) as `0x${string}`;
+  }
   const pricing = priceForToken(tokenId);
 
   const challenge: PaymentChallenge = {
@@ -458,42 +743,102 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const callId = crypto.randomUUID();
   const subscriber = body.subscriber;
 
-  // Onchain authorizeUsage grant in parallel with the agent task.
-  const grantPromise = grantUsage(deps, tokenId, subscriber);
+  // Validation passed. Kick the runtime off in the BACKGROUND and return
+  // immediately with the callId. Client polls /x402/calls/:callId.
+  inFlight.set(callId, {
+    status: "running",
+    tokenId: tokenId.toString(),
+    subscriber,
+    startedAt: Date.now(),
+  });
+  pruneInFlight();
 
-  // Pick the runtime for THIS agent.
-  const runtime = await deps.runtimes.forToken(tokenId);
+  void runInferenceAsync({
+    deps,
+    callId,
+    tokenId,
+    subscriber,
+    input: body.input,
+    paymentReceiptId: validation.receiptId,
+  });
 
-  let taskOutput;
+  return json({ ok: true, status: "running", callId });
+}
+
+interface AsyncInferArgs {
+  deps: HttpDeps;
+  callId: string;
+  tokenId: bigint;
+  subscriber: `0x${string}`;
+  input: string;
+  paymentReceiptId: string;
+}
+
+async function runInferenceAsync(args: AsyncInferArgs): Promise<void> {
+  const { deps, callId, tokenId, subscriber, input, paymentReceiptId } = args;
   try {
+    // Onchain authorizeUsage grant in parallel with the agent task.
+    const grantPromise = grantUsage(deps, tokenId, subscriber);
+    const runtime = await deps.runtimes.forToken(tokenId);
     await runtime.load({ tokenId });
-    taskOutput = await runtime.runTask({
+    const taskOutput = await runtime.runTask({
       tokenId,
       subscriber,
-      input: body.input,
-      paymentReceiptId: validation.receiptId,
+      input,
+      paymentReceiptId,
+    });
+    const inferenceReceipt = await deps.receiptSigner.build(
+      runtime.kind,
+      taskOutput,
+      { tokenId, subscriber, paymentReceiptId },
+      callId,
+    );
+    recordReceipt(inferenceReceipt);
+    const grantTx = await grantPromise;
+    inFlight.set(callId, {
+      status: "complete",
+      output: taskOutput.output,
+      receipt: inferenceReceipt,
+      callId,
+      authorizeUsageTx: grantTx,
+      completedAt: Date.now(),
     });
   } catch (err) {
-    if (err instanceof RuntimeError) {
-      return new Response(
-        JSON.stringify({ error: `agent runtime unavailable: ${err.message}` }),
-        { status: 503, headers: { "Content-Type": "application/json" } },
-      );
-    }
-    throw err;
+    const msg =
+      err instanceof RuntimeError
+        ? `agent runtime unavailable: ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    console.error(`[x402/infer] callId=${callId} failed: ${msg.slice(0, 250)}`);
+    inFlight.set(callId, {
+      status: "error",
+      message: msg,
+      completedAt: Date.now(),
+    });
   }
+}
 
-  const inferenceReceipt = await deps.receiptSigner.build(
-    runtime.kind,
-    taskOutput,
-    { tokenId, subscriber, paymentReceiptId: validation.receiptId },
-    callId,
-  );
-  recordReceipt(inferenceReceipt);
-
-  const grantTx = await grantPromise;
-
-  return json({ callId, output: taskOutput.output, receipt: inferenceReceipt, authorizeUsageTx: grantTx });
+function handleInferResult(callId: string): Response {
+  pruneInFlight();
+  const state = inFlight.get(callId);
+  if (!state) {
+    return json({ status: "not-found" }, { status: 404 });
+  }
+  if (state.status === "running") {
+    return json({ status: "running", callId, sinceMs: Date.now() - state.startedAt });
+  }
+  if (state.status === "error") {
+    return json({ status: "error", message: state.message }, { status: 500 });
+  }
+  return json({
+    ok: true,
+    status: "complete",
+    callId: state.callId,
+    output: state.output,
+    receipt: state.receipt,
+    authorizeUsageTx: state.authorizeUsageTx,
+  });
 }
 
 /**
