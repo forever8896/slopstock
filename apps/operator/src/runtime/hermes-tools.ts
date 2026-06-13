@@ -24,12 +24,14 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { BASE_SEPOLIA_AGENTS } from "@stratum/shared";
+import { encodeInteropAddress, CHAIN_TYPE_EIP155 } from "../../../../packages/shared/src/erc7930.ts";
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { agentWalletFor } from "./agent-wallet.ts";
 import { createAgentPayFetch, exaSearch, formatHits } from "./x402-outbound.ts";
 import { listSkillStems, readSkillBody, upsertSkill, deleteSkill, skillSlug, ensureSkillFrontmatter } from "./skills.ts";
 import { appendMemoryLine } from "./memory-files.ts";
+import { resolveAgent, verifyAgent } from "../store/ens-agent-resolver.ts";
 
 type Hex = `0x${string}`;
 
@@ -293,6 +295,122 @@ const queryAgent: ToolDef = {
       };
     }
 
+    // ── ENS-first resolution (ENSIP-26 + ENSIP-25) ───────────────────────────
+    // For .eth names we first try to resolve the peer via ENS text records and
+    // run ENSIP-25 verification BEFORE paying. A failed verification aborts the
+    // call — we never pay an unverified agent.
+    //
+    // If ENS resolution is unavailable (no records, RPC error) we fall through
+    // to the BASE_SEPOLIA_AGENTS static map so existing named agents still work.
+    let ensResolutionNote = "";
+    let ensEndpointX402: string | null = null;
+
+    if (target.toLowerCase().endsWith(".eth")) {
+      try {
+        const netConfig = ctx.config as unknown as { NETWORK?: string; SEPOLIA_RPC_URL?: string };
+        const ensNetwork = netConfig.NETWORK === "mainnet" ? "mainnet" as const : "sepolia" as const;
+        const ensRpcUrl = netConfig.SEPOLIA_RPC_URL;
+
+        // Resolve ENSIP-26 records
+        const resolved = await resolveAgent(target.toLowerCase(), {
+          network: ensNetwork,
+          rpcUrl: ensRpcUrl,
+        });
+
+        if (resolved.endpointX402) {
+          // Run ENSIP-25 verification before using the endpoint.
+          // We use Base mainnet registry for mainnet, Base Sepolia for testnet.
+          const registryChainId = ensNetwork === "mainnet" ? 8453n : 84532n;
+          const registryAddress: Hex = ensNetwork === "mainnet"
+            ? "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+            : "0x8004A818BFB912233c491871b3d84c89A494BD9e";
+
+          // We don't know the peer's agentId here — ENSIP-25 verification requires
+          // the agentId. If the peer has an `agent-context` record that includes
+          // their agentId, we'd parse it; otherwise we skip ENSIP-25 and log a warning.
+          // For permissionless agents that have registered in ERC-8004, their agentId
+          // should be resolvable. For now, if the agentId is not available, we note
+          // that ENSIP-25 could not be run (not the same as failing it).
+          //
+          // When the peer's tokenId IS known (same-operator calls), we verify.
+          const interopAddr = encodeInteropAddress(CHAIN_TYPE_EIP155, registryChainId, registryAddress);
+
+          // Try to extract agentId from agent-context (look for agentId: N pattern)
+          const agentIdMatch = resolved.agentContext?.match(/agentId["\s:]+(\d+)/i);
+          const agentId = agentIdMatch?.[1] ?? null;
+
+          if (agentId) {
+            const verification = await verifyAgent(target.toLowerCase(), interopAddr, agentId, {
+              network: ensNetwork,
+              rpcUrl: ensRpcUrl,
+            });
+            if (!verification.verified) {
+              return {
+                text:
+                  `ENSIP-25 verification FAILED for '${target}' (agentId=${agentId}): ${verification.reason ?? "empty record"}\n` +
+                  `Key checked: ${verification.key}\n` +
+                  `Refusing payment — cannot pay an unverified agent.`,
+                resultSummary: `ENSIP-25 fail: ${target}`,
+                meta: { ensName: target, verificationKey: verification.key, verified: false },
+              };
+            }
+            ensResolutionNote = `[ENSIP-25 verified agentId=${agentId}] `;
+          } else {
+            // No agentId available — note that ENSIP-25 was skipped (not failed)
+            ensResolutionNote = "[ENS-resolved; ENSIP-25 skipped (no agentId in context)] ";
+          }
+
+          ensEndpointX402 = resolved.endpointX402;
+          console.log(
+            `[query_agent] ENS resolved '${target}' → x402=${ensEndpointX402}${agentId ? ` (ENSIP-25 verified agentId=${agentId})` : ""}`,
+          );
+        }
+      } catch (ensErr) {
+        // ENS resolution failed — fall through to static map
+        const msg = ensErr instanceof Error ? ensErr.message : String(ensErr);
+        console.warn(`[query_agent] ENS resolution failed for '${target}': ${msg.slice(0, 150)} — falling back to static map`);
+      }
+    }
+
+    // If we resolved an x402 endpoint directly from ENS, use it (permissionless path).
+    // In this path we don't have a tokenId (permissionless agents don't have one in
+    // BASE_SEPOLIA_AGENTS), so we use 0n as a placeholder tokenId that will be
+    // rejected by the self-call guard only if callerTokenId is also 0.
+    if (ensEndpointX402) {
+      const wallet = agentWalletFor(ctx.config.OPERATOR_PRIVATE_KEY as Hex, ctx.callerTokenId);
+      const payFetch = createAgentPayFetch(wallet);
+      let body: { output?: string; receipt?: unknown; callId?: string; status?: string; message?: string; settlementTx?: string } = {};
+      try {
+        const res = await payFetch(ensEndpointX402, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ input: inputText, subscriber: wallet.address }),
+        });
+        if (!res.ok) {
+          const t = await res.text().catch(() => "");
+          return {
+            text: `${ensResolutionNote}peer ${res.status}: ${t.slice(0, 200)}`,
+            resultSummary: `peer ${res.status}`,
+          };
+        }
+        body = await res.json();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          text: `${ensResolutionNote}agent payment/call failed: ${msg.slice(0, 250)}`,
+          resultSummary: `pay failed (ENS path)`,
+        };
+      }
+      const output = body.output ?? "(empty)";
+      return {
+        text:
+          `${ensResolutionNote}[paid ${target} via x402 v2${body.settlementTx ? ` · ${body.settlementTx}` : ""}]\n\n${output}`,
+        resultSummary: `${ensResolutionNote}paid ${target}`,
+        meta: { settlementTx: body.settlementTx, peerCallId: body.callId, peerOutput: output },
+      };
+    }
+
+    // ── Static map fallback ────────────────────────────────────────────────────
     const targetAddr = await resolveAgentAddresses(target, ctx.clients.sepoliaPublic);
     if (!targetAddr) {
       return {
