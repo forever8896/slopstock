@@ -200,8 +200,8 @@ export function AcquireClient({ agent }: Props) {
   return (
     <>
       <div className="crumb">
-        <Link href="/">markets</Link> <span className="muted">/</span>{" "}
-        <Link href={`/agent/${agent.ticker}`}>{agent.ticker}</Link>{" "}
+        <Link href="/app">markets</Link> <span className="muted">/</span>{" "}
+        <Link href={`/app/agent/${agent.ticker}`}>{agent.ticker}</Link>{" "}
         <span className="muted">/</span> <span className="acc">acquire</span>
         <span style={{ float: "right", color: "var(--mute-2)" }}>
           share contract <span className="fg2">{shortAddr(agent.contracts.shareToken, 6)}</span> ·{" "}
@@ -343,7 +343,7 @@ export function AcquireClient({ agent }: Props) {
                       : "ipo closed"}
               </button>
             )}
-            <Link className="btn" href={`/agent/${agent.ticker}`}>view holder table</Link>
+            <Link className="btn" href={`/app/agent/${agent.ticker}`}>view holder table</Link>
             <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--mute)" }}>
               slippage 0% · price-locked window
             </span>

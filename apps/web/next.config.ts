@@ -12,6 +12,13 @@ const config: NextConfig = {
   // `workspace:*` imports.
   transpilePackages: ["@stratum/shared", "@stratum/sdk", "@stratum/contracts-types"],
   outputFileTracingRoot: workspaceRoot,
+  // Product moved under /app; keep old links working. "/" is the landing now.
+  async redirects() {
+    return [
+      { source: "/agent/:path*", destination: "/app/agent/:path*", permanent: false },
+      { source: "/launch", destination: "/app/launch", permanent: false },
+    ];
+  },
   webpack: (cfg) => {
     // wagmi/rainbowkit pulls in MetaMask SDK which has React-Native-only deps.
     // Stub them out — they're never actually used in the browser bundle.

@@ -102,10 +102,10 @@ export default async function AgentDetailPage({ params }: PageProps) {
           ) : null}
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
-            <Link className="btn primary" href={`/agent/${agent.ticker}/subscribe`}>
+            <Link className="btn primary" href={`/app/agent/${agent.ticker}/subscribe`}>
               call this agent →
             </Link>
-            <Link className="btn" href={`/agent/${agent.ticker}/acquire`}>
+            <Link className="btn" href={`/app/agent/${agent.ticker}/acquire`}>
               buy shares of it
             </Link>
             <span className="muted" style={{ fontSize: 14 }}>
@@ -263,7 +263,6 @@ export default async function AgentDetailPage({ params }: PageProps) {
         <div className="panel">
           <div className="panel-head">
             <div className="lhs"><span>metadata</span><span className="tag muted">onchain</span></div>
-            <div className="rhs"><span>verified</span></div>
           </div>
           <div className="kv">
             <KvRow k="inft contract" v={shortAddr(agent.contracts.iNFT, 6)} />
@@ -296,7 +295,7 @@ export default async function AgentDetailPage({ params }: PageProps) {
 function Crumb({ agent }: { agent: AgentDetail }) {
   return (
     <div className="crumb">
-      <Link href="/">markets</Link> <span className="muted">/</span>{" "}
+      <Link href="/app">markets</Link> <span className="muted">/</span>{" "}
       <span className="fg2">agent</span> <span className="muted">/</span>{" "}
       <span className="acc">{agent.ticker}</span>
       <span style={{ float: "right", color: "var(--mute-2)" }}>
@@ -450,8 +449,7 @@ function InferencesPanel({ inferences, ticker }: { inferences: InferenceLog[]; t
               <span className="ts">on-chain</span>
               <span>
                 <span className="glyph">⇲ </span>
-                <b className="acc">AUDIT</b> paid <b className="acc">ORCL</b> $0.10 USDC{" "}
-                <span className="pill ok" style={{ marginLeft: 6 }}>real tx</span>
+                <b className="acc">AUDIT</b> paid <b className="acc">ORCL</b> $0.10 USDC
               </span>
               <span className="meta">block 40820457</span>
             </div>
@@ -468,7 +466,6 @@ function InferencesPanel({ inferences, ticker }: { inferences: InferenceLog[]; t
                   0xc870a5a3a1c5707c7fca5d67d44dd9be4f8d2594949cdf07015e732ef1dbd18b ↗
                 </a>
               </span>
-              <span className="meta">verifiable on chain</span>
             </div>
           </div>
         ) : null}

@@ -1,16 +1,27 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { JetBrains_Mono } from "next/font/google";
-import { Masthead } from "@/components/masthead";
-import { TickerTape } from "@/components/ticker-tape";
-import { SystemBar } from "@/components/system-bar";
-import { Providers } from "./providers";
+import { JetBrains_Mono, Fraunces, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
 const mono = JetBrains_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "700"],
   variable: "--font-mono",
+  display: "swap",
+});
+
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  weight: ["300", "400", "500"],
+  style: ["normal", "italic"],
+  variable: "--font-fraunces",
+  display: "swap",
+});
+
+const hanken = Hanken_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-sans",
   display: "swap",
 });
 
@@ -22,15 +33,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={mono.variable}>
+    <html lang="en" className={`${mono.variable} ${fraunces.variable} ${hanken.variable}`}>
       <body>
         <div className="scan" aria-hidden />
-        <Providers>
-          <Masthead />
-          <TickerTape />
-          <main className="page">{children}</main>
-          <SystemBar />
-        </Providers>
+        {children}
       </body>
     </html>
   );

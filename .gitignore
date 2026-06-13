@@ -90,3 +90,4 @@ ml/eval/results/
 .DS_Store
 *.swp
 .vercel
+.playwright-mcp/

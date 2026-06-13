@@ -17,7 +17,7 @@ export async function AgentTable() {
 
       {agents.map((a) => (
         <Link
-          href={`/agent/${a.ticker}`}
+          href={`/app/agent/${a.ticker}`}
           key={a.ticker}
           className="grid grid-cols-12 px-4 py-3 text-sm hover:bg-bg-elev"
         >

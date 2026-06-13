@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Crumb } from "../../components/crumb";
-import { Rail } from "../../components/rail";
+import { Crumb } from "@/components/crumb";
+import { Rail } from "@/components/rail";
 import {
   useAccount,
   useChainId,
@@ -21,8 +21,8 @@ import {
   type CapabilityTemplateId,
   type RuntimeTier,
 } from "@stratum/shared";
-import { pinManifestToOgStorage } from "../../lib/og-storage";
-import { InferenceOutput } from "../../components/inference-output";
+import { pinManifestToOgStorage } from "@/lib/og-storage";
+import { InferenceOutput } from "@/components/inference-output";
 
 type Hex = `0x${string}`;
 
@@ -405,7 +405,7 @@ export function LaunchClient() {
       <Crumb
         path={
           <>
-            ~/<Link href="/">markets</Link> · <Link href="/launch">launch</Link> ·{" "}
+            ~/<Link href="/app">markets</Link> · <Link href="/app/launch">launch</Link> ·{" "}
             <b style={{ color: "var(--fg)" }}>step 0{stepIndex + 1}</b> / 04 · {stepLabel}
           </>
         }
@@ -572,7 +572,7 @@ function PickStep({
           <b className="acc">{selected?.label ?? "—"}</b> · pre-wired tools, your prompt + skills next
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <Link className="btn" href="/">esc · cancel</Link>
+          <Link className="btn" href="/app">esc · cancel</Link>
           <button className="btn primary" onClick={onContinue}>
             continue to identity →
           </button>
@@ -1360,7 +1360,7 @@ function LiveStep(props: {
                     <span className="acc" style={{ fontWeight: 600 }}>✓ ipo open</span>
                     {" · "}IPOSale can now fill share orders against your treasury.
                   </div>
-                  <Link className="acc" href={`/agent/${ticker.toUpperCase()}/acquire`}>
+                  <Link className="acc" href={`/app/agent/${ticker.toUpperCase()}/acquire`}>
                     open the cap table → /agent/{ticker.toUpperCase()}/acquire
                   </Link>
                 </div>

@@ -36,35 +36,16 @@ export default async function Home() {
           </div>
 
           <div className="hero-cta">
-            <Link className="btn primary" href="/agent/AUDIT">browse agents →</Link>
-            <Link className="btn" href="/launch">launch your own</Link>
-            <Link className="btn ghost" href="/agent/AUDIT/subscribe">submit inference</Link>
+            <Link className="btn primary" href="/app/agent/AUDIT">browse agents →</Link>
+            <Link className="btn" href="/app/launch">launch your own</Link>
+            <Link className="btn ghost" href="/app/agent/AUDIT/subscribe">submit inference</Link>
           </div>
 
-          <div className="agent-event">
-            <span className="glyph">↳</span>
-            <span>
-              Live agent-to-agent payment: <b className="acc">AUDIT</b> hit a question it
-              couldn&apos;t answer alone, paid <b className="acc">ORCL</b> 0.10 USDC for a
-              price feed, used the response.{" "}
-              <a
-                href="https://sepolia.basescan.org/tx/0x79c7771d2eab5f54d30b0d2c2b53831e80957df58a331b457d94d122c4feeb72"
-                target="_blank"
-                rel="noreferrer"
-                className="acc"
-                style={{ textDecoration: "underline" }}
-              >
-                tx 0x79c7771d ↗
-              </a>
-              <span className="muted"> · base sepolia</span>
-            </span>
-          </div>
         </div>
 
         <div className="hero-r">
           <div className="loop-head">
-            <span>agent economy · cycle</span>
-            <span>realtime</span>
+            <span>how the economy works</span>
           </div>
           <div className="loop">
             <pre className="ascii" dangerouslySetInnerHTML={{ __html: ASCII_DIAGRAM }} />
@@ -91,17 +72,14 @@ export default async function Home() {
           label="agents listed"
           value={`${agents.length}`}
           sub={`/ ${agents.length} active`}
-          delta="+1 this week"
         />
         <Stat
           label="cumulative revenue"
           value={`$${formatUsdc(cumulativeRevenue, 2)}`}
-          delta="onchain · base-sepolia"
         />
         <Stat
           label="calls today"
           value={`${callsToday}`}
-          delta={`${internalCalls} internal`}
         />
       </div>
 
@@ -112,7 +90,7 @@ export default async function Home() {
           <span className="muted">
             click any row to see the agent&apos;s vault, holders, and recent calls. the green
             <b className="acc"> new </b>tag means it was launched permissionlessly via{" "}
-            <Link href="/launch" className="acc" style={{ textDecoration: "underline" }}>/launch</Link>.
+            <Link href="/app/launch" className="acc" style={{ textDecoration: "underline" }}>/launch</Link>.
           </span>
         </div>
         <div className="filters">
@@ -202,7 +180,7 @@ export default async function Home() {
         {agents.map((a) => (
           <Link
             key={a.ticker}
-            href={`/agent/${a.ticker}`}
+            href={`/app/agent/${a.ticker}`}
             className="market-card"
             style={{ display: "grid", color: "inherit" }}
           >
@@ -231,7 +209,7 @@ export default async function Home() {
         <span className="sub">the agent gets paid either way · shareholders earn from inference</span>
       </div>
       <div className="ds-grid cols-2" style={{ gap: "var(--gap)" }}>
-        <Link href="/agent/AUDIT/subscribe" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
+        <Link href="/app/agent/AUDIT/subscribe" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
           <div className="up" style={{ marginBottom: 6 }}>① call an agent</div>
           <div style={{ fontSize: 18, color: "var(--fg)", marginBottom: 6 }}>
             pay a per-call fee → get a TEE-attested response
@@ -243,7 +221,7 @@ export default async function Home() {
           </div>
           <div className="acc" style={{ marginTop: 10 }}>try it on AUDIT →</div>
         </Link>
-        <Link href="/agent/AUDIT/acquire" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
+        <Link href="/app/agent/AUDIT/acquire" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
           <div className="up" style={{ marginBottom: 6 }}>② buy a share of one</div>
           <div style={{ fontSize: 18, color: "var(--fg)", marginBottom: 6 }}>
             mint ERC-20 shares from the IPO → earn future revenue pro-rata
@@ -300,3 +278,4 @@ const ASCII_DIAGRAM = `                      ┌──────────�
                                                  │
                                                  ▼
                                        <span class="acc">$0.10 usdc · onchain</span>`;
+

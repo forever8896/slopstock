@@ -14,13 +14,13 @@ export function AgentHeader({ agent }: { agent: AgentDetail }) {
       </div>
       <div className="flex gap-2">
         <Link
-          href={`/agent/${agent.ticker}/subscribe`}
+          href={`/app/agent/${agent.ticker}/subscribe`}
           className="border border-border px-3 py-1.5 text-sm hover:border-accent-green hover:text-accent-green"
         >
           subscribe
         </Link>
         <Link
-          href={`/agent/${agent.ticker}/acquire`}
+          href={`/app/agent/${agent.ticker}/acquire`}
           className="border border-border bg-bg-elev px-3 py-1.5 text-sm hover:border-accent-red hover:text-accent-red"
         >
           acquire

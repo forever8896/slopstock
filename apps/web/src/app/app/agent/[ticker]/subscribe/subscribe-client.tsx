@@ -253,7 +253,7 @@ export function SubscribeClient({ agent }: Props) {
       <Crumb
         path={
           <>
-            ~/<Link href="/">markets</Link> · <Link href={`/agent/${agent.ticker}`}>{agent.ticker}</Link> ·{" "}
+            ~/<Link href="/app">markets</Link> · <Link href={`/app/agent/${agent.ticker}`}>{agent.ticker}</Link> ·{" "}
             <b style={{ color: "var(--fg)" }}>subscribe</b>
           </>
         }
