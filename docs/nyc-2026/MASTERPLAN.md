@@ -43,6 +43,7 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 | 06 | [revenue-and-economics](06-revenue-and-economics.md) | 🟡 partial | x402 settle works | revenue split + P&L, mainnet rails deploy (IPO gated), LI.FI self-funding top-up, **cost-display UX** (below), GTM/sell-at-venue |
 | 07 | [build-order-checklist](07-build-order-checklist.md) | 🟡 living | the execution sequence + stop-losses | keep in sync as phases complete |
 | 08 | [hermes-fidelity](08-hermes-fidelity.md) | 🟢 mostly done | commits `a1dd1eb`→`c8bde95`: skills.ts, memory-files.ts, progressive disclosure, skill_manage, Layer-1 memory, 5+tool trigger; tests green | verify all 8 tasks complete vs doc checklist; wire into Walrus amnesia demo |
+| 09 | [agent-secrets](09-agent-secrets.md) | 🟢 decided | credential≠LLM-context principle; tiers x402-native → operator-env → 1Claw → TEE-sealed | Tier 1 (operator env) builds w/ drill-cypher; Tier 2 = **talk to Kevin/1Claw** at venue |
 | 13 | [platform-split (web)](../13-platform-split-landing-docs.md) | 🟡 in-flight | daylight redesign, landing/app/docs split; commits + uncommitted `apps/web/*` | finish redesign; **read `deprecated` flag to hide legacy agents** |
 
 ## New plans — tracked, not yet written (📋 = needs its own spec doc)
@@ -50,6 +51,7 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 | Plan | Status | Notes |
 |---|---|---|
 | **Demo-script agent** (first consumer agent) | 🟡 brainstorm | DECIDED: demo-script first; hybrid arch (deterministic repo-digest + `read_file` tool); brain = deepseek-v3 0G TEE (**tool-calling PROVEN** `smoke-0g-tool-calling.ts`; v4 = one-line swap, needs sub-account funding). Takes GitHub URL + optional "what bounties/vibe". Moat = our judging-criteria/marketing knowledge. **Next: finish brainstorm → spec doc → writing-plans.** Sibling agents: bounty-fit, submission-checker, integration-recipe. Customers = hackers in the room. |
+| **Drill-cypher agent** (2nd consumer agent) | 🟡 brainstorm | Fun/viral: writes a drill cypher roasting your "opps" → **ElevenLabs Music v2** (one API call: lyrics→full rap track, vocals on beat, commercially cleared — kills beat-sourcing/TTS-align) → store on **Walrus** (media bounty synergy). Brain edgy/profane latitude PROVEN (`smoke-0g-tone-test.ts`). Moat = drill lyric craft. Needs: ElevenLabs key (Tier-1 secret, [09](09-agent-secrets.md)); validate audio quality with ONE real gen before committing. |
 | **Agent-economics cost-display UX** | 📋 idea | Builder-platform feature: show deployer the per-call OG inference cost (real ledger numbers) so they price above COGS; "cost per X tokens" in launch UI. Backed by LI.FI top-up loop. Part of [06](06-revenue-and-economics.md). |
 | **Legacy-agent deprecation** | 🟡 partial | `deprecated:true` set on AUDIT/MEMER/ORCL in `agent-metadata.ts`; the (in-flight) web UI must read the flag to hide/badge them. |
 
