@@ -18,12 +18,14 @@ prove nothing. The non-cosmetic requirements are:
    tree structure and follows up with `read_file` tool calls on the files that matter
    (README, entry points, key contracts, package.json). The output is specific to your
    code, not a generic hackathon script template.
-2. **It knows the judging environment.** The system prompt carries our hand-curated
-   knowledge of ETHGlobal NYC judging criteria, the current sponsor bounty stack (what
-   each sponsor actually rewards vs. what the booth description says), and the frame
-   "what does a winning demo look like vs. what most people do." That knowledge is
-   Slopstock's moat — it is not in any GitHub repo and cannot be recovered by prompting
-   the same LLM without it.
+2. **It knows the judging environment — grounded in real data, not vibes.** The agent
+   queries the **ethglobal-skills API** ([data backbone](#data-backbone-ethglobal-skills-x402-api))
+   live for the actual sponsor bounty text and the **17,643 past projects + every finalist
+   and bounty winner** of the last six years, then layers our hand-curated *frame* (what
+   "overall impression" actually weighs, what most demos get wrong in the first 30s) on
+   top. The moat is the combination: a public LLM has neither the live bounty corpus nor
+   our synthesis of what wins. Grounding in finalist patterns also kills hallucinated
+   advice — every callout can cite a real precedent.
 3. **It runs on 0G Compute TEE.** The inference is on-chain (verifiable, paid per call),
    not a free API wrapper. The receipt lands on Walrus ([03](03-walrus.md)). This is the
    demo we run to show our own platform is using itself.
@@ -43,13 +45,34 @@ operator
   │       ── inject into initial system message context
   │
   └─ 2. 0G Compute TEE inference  (deepseek-v3 @ 0x1B3AAef3…)
-           tools: [ read_file(path) ]   ← proven in smoke-0g-tool-calling.ts
-           system_prompt: <judging-knowledge block> + digest
+           tools: [ read_file(path),                ← proven in smoke-0g-tool-calling.ts
+                    fetch_bounties(event, sponsor),  ← ethglobal-skills x402 API
+                    search_winners(keyword, event) ] ← ethglobal-skills x402 API
+           system_prompt: <judging-frame block> + digest
            user_prompt: "write a 90-second demo script for this project"
-           ── model may emit read_file calls for specific files it wants
-           ── operator fetches from GitHub, feeds back results
+           ── model emits read_file to drill into the repo
+           ── model emits fetch_bounties/search_winners to ground callouts in live data
+           ──   operator pays ethglobal-skills via x402 (Base mainnet) past the free tier
            ── model produces final script (structured: hook / live demo beats / bounty callouts / close)
 ```
+
+### Data backbone: ethglobal-skills x402 API
+
+The factual half of the moat is **not** hand-typed — it's pulled live from
+`https://ethglobalskills.vercel.app` (the `ethglobal-skills/repo` project):
+
+| Endpoint | Use in this agent |
+|---|---|
+| `GET /api/sponsors?keyword=` | enumerate the event's sponsors |
+| `GET /api/prizes?event=&sponsor=` | the **actual bounty text + qualifications** to angle callouts against |
+| `GET /api/projects?event=&keyword=&prize=&include=&limit=` | finalist/winner precedents to ground "what wins" advice |
+
+**It is itself an x402 API**: 10 free requests/minute, then `HTTP 402 → $0.05 USDC on
+Base mainnet per request`. We pay it with our **own x402 v2 outbound leg**
+([05](05-x402-v2.md)) — so the agent *dogfoods the payment triangle against a real,
+external third-party counterparty at the venue*. That is the headline agentic-commerce
+beat, not a side effect. (Free tier covers a single demo run; budget ~$0.20 of Base USDC
+for a session of repeated demos.)
 
 The split is intentional:
 
@@ -76,19 +99,24 @@ Current funded sub-account covers provider `0x1B3AAef3ae5050EEE04ea38cD4B087472B
 | `bounties` | optional | e.g. `"ENS, Walrus, Dynamic"` — agent callouts specific bounty scoring angles |
 | `vibe` | optional | `"technical"` / `"punchy"` / `"chaotic"` — tone latitude proven via `smoke-0g-tone-test.ts` |
 
-### Moat: the system prompt knowledge block
+### Moat: live data × our judging frame
 
-The judging-knowledge block is **not** in this spec (it's the agent's value). It encodes:
-- ETHGlobal judging rubric from first-hand experience (what "overall impression" actually
-  weighs vs. the categories listed)
-- Current NYC 2026 sponsor bounty profiles: what each sponsor's booth engineer is
-  actually excited by, which criteria are checkboxes vs. differentiators
-- Demo-script anti-patterns: what most presentations do wrong in the first 30 seconds
-- Structure template for a 90-second slot (hook → live demo beats → bounty callout →
-  close with ask)
+The moat is the **product** of two things, neither sufficient alone:
 
-This block is hand-authored in `packages/shared/src/agents/demo-script/system-prompt.ts`
-and loaded into the Hermes system message. **It is the agent's IP, not a library.**
+1. **Live factual corpus (ethglobal-skills API).** Real sponsor bounty text + 17,643
+   projects + every finalist/winner. Always current, impossible to reproduce by prompting
+   a bare LLM. Fetched at runtime via the `fetch_bounties`/`search_winners` tools above.
+2. **Our judging frame (hand-authored).** The synthesis a data dump can't give you:
+   - what "overall impression" actually weighs vs. the listed categories (first-hand)
+   - which bounty criteria are checkboxes vs. true differentiators
+   - demo-script anti-patterns — what most presentations get wrong in the first 30s
+   - the 90-second structure template (hook → live demo beats → bounty callout → close)
+
+The frame is hand-authored in `packages/shared/src/agents/demo-script/system-prompt.ts`
+and loaded into the Hermes system message; it instructs the model to *back every callout
+with a real bounty/winner pulled from the API*. **The moat is frame-applied-to-live-data,
+not a static text block** — a competitor copying our prompt still lacks the data feed, and
+a competitor with the data feed still lacks our frame.
 
 ### Output format
 
@@ -124,9 +152,14 @@ _Generated by Slopstock demo-script agent · receipt: <walrus-blobId>_
   + tool round-trips (4K headroom). deepseek-v3 context window is 32K — no pressure.
 - **x402 pricing: 2.00 USDC per run.** COGS ≈ ~$0.003 (deepseek-v3 at 0G compute rates
   for ~3K tokens). Margin is the point — this is the revenue-from-strangers demo.
-- **Exa for bounty-criteria supplementation (stretch).** If we have Exa live via x402
-  ([05](05-x402-v2.md)), the agent can fetch up-to-the-hour bounty criteria pages.
-  Optional; the knowledge block covers the base case without it.
+- **ethglobal-skills via x402 (core, not stretch).** Base URL `https://ethglobalskills.vercel.app`.
+  10 free req/min then 402 → $0.05 USDC on Base mainnet. Pay it through our existing
+  `x402-fetch` client ([05](05-x402-v2.md)) — the 402 challenge is standard. Cache responses
+  per `(event, sponsor)` for the session to stay inside the free tier where possible. Respect
+  the `X-Skill-Version` header (log a warning if a newer version ships mid-event).
+- **Exa for open-web supplementation (stretch).** If Exa is live via x402, the agent can
+  fetch anything ethglobal-skills doesn't cover. Optional; ethglobal-skills + the frame
+  cover the base case without it.
 - **Receipt pinning on Walrus** ([03](03-walrus.md)). Every run generates a receipt;
   blobId is included in the output footer. This ties the revenue event to the decentralized
   tape — the demo-within-the-demo.
@@ -165,6 +198,26 @@ Tests:
 - Path with leading `/` is normalised to relative.
 - File > 100KB is truncated to 100KB with a `[truncated]` suffix.
 - Non-existent path returns `"[file not found: <path>]"` (soft error — model recovers).
+
+### Step 2b — ethglobal-skills tools (x402-paid)
+`apps/operator/src/agents/demo-script/ethglobal-skills.ts`
+
+```ts
+export const FETCH_BOUNTIES_TOOL = { /* tool def: (event, sponsor) */ }
+export const SEARCH_WINNERS_TOOL = { /* tool def: (keyword, event, limit) */ }
+export async function fetchBounties(event: string, sponsor?: string): Promise<Bounty[]>
+export async function searchWinners(keyword: string, event?: string, limit?: number): Promise<ProjectRecord[]>
+// both go through the x402-fetch client; pay only when the API answers 402
+```
+
+Tests:
+- `fetchBounties("ETHGlobal NYC 2026", "ENS")` returns bounty records with
+  `title`/`description`/`qualifications` fields.
+- A 402 response triggers the x402 payment path and the retried request succeeds (integration
+  test against the live API; assert a real Base tx/settlement occurred — ties to [05](05-x402-v2.md)).
+- Session cache: a repeat `(event, sponsor)` within the run does not issue a second HTTP call.
+- API down / network error returns `[]` (soft fail — agent falls back to the frame alone,
+  never crashes the run).
 
 ### Step 3 — 0G inference loop
 `apps/operator/src/agents/demo-script/run.ts`
@@ -211,7 +264,11 @@ or the Slopstock repo itself, run the agent, pay 2 USDC, get a script back in un
 
 - [ ] `POST /run/demo-script { github_url: "https://github.com/forever8896/slopstock" }` returns a
       complete, structured script within 60 s (wall clock).
-- [ ] Script contains at least one sponsor-specific callout that names a real NYC 2026 bounty.
+- [ ] Script contains at least one sponsor-specific callout that names a real NYC 2026 bounty
+      **fetched live from ethglobal-skills** (not from the static frame) — verifiable in logs.
+- [ ] The run makes at least one **x402 payment to ethglobal-skills on Base** when past the
+      free tier, with a settlement visible alongside our own inbound payment — the
+      external-counterparty payment-triangle beat, demonstrable on one screen.
 - [ ] Receipt blobId is in the footer and resolves on the Walrus testnet aggregator.
 - [ ] Payment path: caller pays 2.00 USDC via x402; Slopstock operator wallet receives it;
       ledger entry visible in the web P&L panel ([06](06-revenue-and-economics.md)).
@@ -253,6 +310,9 @@ scope-creep these in — write them as separate plan docs if funded.
 
 - GitHub REST API tree: `GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1`
 - GitHub contents: `GET /repos/{owner}/{repo}/contents/{path}`
+- **ethglobal-skills API**: `https://ethglobalskills.vercel.app` — `GET /api/sponsors?keyword=`,
+  `GET /api/prizes?event=&sponsor=`, `GET /api/projects?event=&keyword=&sponsor=&prize=&pool=&include=&limit=`
+  (10 free/min, then x402 $0.05 USDC on Base). Repo + SKILL.md: https://github.com/ethglobal-skills/repo
 - 0G Compute tool-calling proof: `apps/operator/scripts/smoke-0g-tool-calling.ts`
 - 0G Compute tone proof: `apps/operator/scripts/smoke-0g-tone-test.ts`
 - Deepseek-v3 provider: `0x1B3AAef3ae5050EEE04ea38cD4B087472BD85EB0`
