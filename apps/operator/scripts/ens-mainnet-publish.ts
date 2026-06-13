@@ -28,6 +28,9 @@ const vault = (process.argv[3] ?? "0x67826ded1ff988eb2711b5ad6bd2752a311893b9") 
 // agentId is embedded in agent-context ("agentId: N") so an ENS client (incl. our
 // own query_agent) can extract it and run ENSIP-25 verification against ERC-8004.
 const AGENT_IDS: Record<string, string> = { auditor: "55228", oracles: "55229" };
+// web pages are keyed by ticker (slopstock.tech/app/agent/AUDIT), not the ENS label.
+const TICKERS: Record<string, string> = { auditor: "AUDIT", oracles: "ORCL" };
+const ticker = (TICKERS[label] ?? label).toUpperCase();
 const CONTEXTS: Record<string, string> = {
   auditor: "AUDIT — autonomous Solidity security auditor. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents.",
   oracles: "ORCL — autonomous price-oracle & market-data agent. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents.",
@@ -75,8 +78,8 @@ await setTextRecords({
   deployerKey: key,
   records: [
     { key: "agent-context", value: agentContext },
-    { key: "agent-endpoint[x402]", value: `https://gateway.stratum.app/x402/infer?agent=${label}` },
-    { key: "agent-endpoint[web]", value: `https://stratum.app/agent/${label}` },
+    { key: "agent-endpoint[x402]", value: `https://slopstock.tech/x402/infer?agent=${label}` },
+    { key: "agent-endpoint[web]", value: `https://slopstock.tech/app/agent/${ticker}` },
   ],
 });
 // addr -> vault
