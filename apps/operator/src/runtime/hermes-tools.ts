@@ -28,6 +28,8 @@ import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { agentWalletFor } from "./agent-wallet.ts";
 import { createAgentPayFetch, exaSearch, formatHits } from "./x402-outbound.ts";
+import { listSkillStems, readSkillBody, upsertSkill, deleteSkill, skillSlug, ensureSkillFrontmatter } from "./skills.ts";
+import { appendMemoryLine } from "./memory-files.ts";
 
 type Hex = `0x${string}`;
 
@@ -664,6 +666,82 @@ const webSearchTool: ToolDef = {
   },
 };
 
+// ─── Progressive-disclosure skill tools (Hermes Agent pattern) ──────────────
+
+const skillsList: ToolDef = {
+  name: "skills_list",
+  description:
+    "List your accumulated skills (names + descriptions only — Level 0). Call this first to see what you already know before tackling a task; then skill_view to read one in full.",
+  argsSchema: { type: "object", properties: {}, additionalProperties: false },
+  async handler(_args, ctx) {
+    const stems = await listSkillStems(ctx.agentDir);
+    if (stems.length === 0) return { text: "(no skills yet)", resultSummary: "0 skills" };
+    const lines: string[] = [];
+    for (const stem of stems) {
+      const body = await readSkillBody(ctx.agentDir, stem);
+      const desc = body?.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? "";
+      lines.push(`▸ ${stem}: ${desc}`);
+    }
+    return { text: lines.join("\n"), resultSummary: `${stems.length} skills` };
+  },
+};
+
+const skillView: ToolDef = {
+  name: "skill_view",
+  description:
+    "Read the full content of one skill by its stem (as shown by skills_list). Pull a skill into context only when it's relevant — Level 1 of progressive disclosure.",
+  argsSchema: {
+    type: "object",
+    properties: { name: { type: "string", description: "skill stem, e.g. 'oracle-manipulation'" } },
+    required: ["name"],
+    additionalProperties: false,
+  },
+  async handler(args, ctx) {
+    const name = String(args["name"] ?? "").trim();
+    if (!name) return { text: "(missing name)", resultSummary: "missing name" };
+    const body = await readSkillBody(ctx.agentDir, name);
+    if (body === null) {
+      const stems = await listSkillStems(ctx.agentDir);
+      return { text: `(no skill '${name}'); available: ${stems.join(", ") || "(none)"}`, resultSummary: `miss: ${name}` };
+    }
+    return { text: body, resultSummary: `viewed ${skillSlug(name)} (${body.length}b)` };
+  },
+};
+
+const skillManage: ToolDef = {
+  name: "skill_manage",
+  description:
+    "Create or improve a skill so you remember a workflow next time. op: 'create' | 'edit' | 'delete'. Provide a short kebab `name`; for create/edit provide a Markdown `content` body. Prefer 'edit' on an existing skill over making near-duplicates — improving skills in place is how you get better over time.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      op: { type: "string", enum: ["create", "edit", "delete"] },
+      name: { type: "string", description: "short skill title, e.g. 'oracle-manipulation'" },
+      content: { type: "string", description: "Markdown body (for create/edit)" },
+    },
+    required: ["op", "name"],
+    additionalProperties: false,
+  },
+  async handler(args, ctx) {
+    const op = String(args["op"] ?? "");
+    const name = String(args["name"] ?? "").trim();
+    if (!name) return { text: "(missing name)", resultSummary: "missing name" };
+    if (op === "delete") {
+      const ok = await deleteSkill(ctx.agentDir, name);
+      return ok
+        ? { text: `deleted ${skillSlug(name)}`, resultSummary: `deleted ${skillSlug(name)}` }
+        : { text: `(no skill '${name}' to delete)`, resultSummary: "delete miss" };
+    }
+    const content = String(args["content"] ?? "").trim();
+    if (!content) return { text: "(create/edit needs content)", resultSummary: "missing content" };
+    const res = await upsertSkill(ctx.agentDir, name, ensureSkillFrontmatter(name, content));
+    return {
+      text: `${res.action}d skill '${res.stem}' (v${res.version})`,
+      resultSummary: `${res.action} ${res.stem} v${res.version}`,
+    };
+  },
+};
+
 export const TOOL_REGISTRY: Record<string, ToolDef> = {
   parse_ast: parseAst,
   pattern_search: patternSearch,
@@ -674,6 +752,9 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
   onchain_read: onchainReadTool,
   image_gen: imageGenTool,
   web_search: webSearchTool,
+  skills_list: skillsList,
+  skill_view: skillView,
+  skill_manage: skillManage,
 };
 
 // `encodeFunctionData` is imported but only used inside reflection-like
