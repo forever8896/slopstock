@@ -19,6 +19,7 @@ import type {
   PaymentPayload,
   PaymentRequired,
   PaymentRequirements,
+  SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
 import { safeBase64Decode } from "@x402/core/utils";
@@ -118,4 +119,25 @@ export async function requirePayment(args: {
   if (!verdict.isValid) return { ok: false, response: build402(resource, [requirements]) };
 
   return { ok: true, payload, requirements, payer: verdict.payer };
+}
+
+/**
+ * Settle a verified payment AFTER the work succeeded. Never throws — a facilitator
+ * error or a failed settlement comes back as `{ success: false }` so the caller
+ * can decide how to surface it (the work is already done; we just record the result).
+ */
+export async function settlePayment(args: {
+  facilitator: Pick<FacilitatorClient, "settle">;
+  payload: PaymentPayload;
+  requirements: PaymentRequirements;
+}): Promise<SettleResponse> {
+  try {
+    return await args.facilitator.settle(args.payload, args.requirements);
+  } catch (e) {
+    return {
+      success: false,
+      transaction: "",
+      errorReason: e instanceof Error ? e.message : "settlement failed",
+    } as SettleResponse;
+  }
 }

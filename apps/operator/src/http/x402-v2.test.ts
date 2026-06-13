@@ -8,6 +8,7 @@ import {
   buildAgentPaymentRequirements,
   decodePaymentHeader,
   requirePayment,
+  settlePayment,
 } from "./x402-v2";
 
 const VAULT = "0x1c1fa59c0b6e631a47c7ec4717af3a0b7bfdb382" as const;
@@ -142,5 +143,30 @@ describe("requirePayment (inbound gate)", () => {
     const gate = await requirePayment({ paymentHeader: validHeader, resource, requirements, facilitator: accept });
     expect(gate.ok).toBe(true);
     if (gate.ok) expect(gate.payer).toBe("0x1111111111111111111111111111111111111111");
+  });
+});
+
+describe("settlePayment", () => {
+  const net = resolveNetwork({ NETWORK: "mainnet" });
+  const requirements = buildAgentPaymentRequirements(net, { priceSmallest: "1", payTo: VAULT, resource: "r" });
+  const payload = { x402Version: 2, accepted: requirements, payload: {} } as never;
+
+  test("returns the on-chain txHash on successful settlement", async () => {
+    const facilitator = { settle: async () => ({ success: true, transaction: "0xabc123", payer: "0x1" }) };
+    const r = await settlePayment({ facilitator, payload, requirements });
+    expect(r.success).toBe(true);
+    expect(r.transaction).toBe("0xabc123");
+  });
+
+  test("reports failure (does not throw) when settlement fails", async () => {
+    const facilitator = { settle: async () => ({ success: false, transaction: "", errorReason: "expired" }) };
+    const r = await settlePayment({ facilitator, payload, requirements });
+    expect(r.success).toBe(false);
+  });
+
+  test("surfaces a thrown facilitator error as a failed settlement", async () => {
+    const facilitator = { settle: async () => { throw new Error("facilitator down"); } };
+    const r = await settlePayment({ facilitator, payload, requirements });
+    expect(r.success).toBe(false);
   });
 });
