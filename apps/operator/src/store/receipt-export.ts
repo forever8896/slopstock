@@ -15,22 +15,25 @@
  *     safe to call multiple times on the same data (idempotent).
  */
 
-import { recordReceipt, listReceipts } from "./receipts.ts";
+import { recordReceipt, listAllReceiptsForToken } from "./receipts.ts";
 import type { InferenceReceipt } from "@stratum/shared";
 
 /**
  * Serialize all receipts for a single agent (identified by tokenId) as
- * newline-delimited JSON (NDJSON). Each line is one receipt.
+ * newline-delimited JSON (NDJSON). Each line is one receipt, ordered by ts ASC
+ * so the tape reproduces the original chronological sequence.
  *
  * Returns an empty string if the agent has no receipts.
  * Never includes receipts belonging to other agents.
+ *
+ * Uses listAllReceiptsForToken() — an unbounded query — so agents with >500
+ * receipts are exported completely. Do NOT replace this with listReceipts()
+ * which is capped at 500 for the HTTP endpoint.
  */
 export function exportAgentReceipts(tokenId: bigint): string {
-  // listReceipts caps at 500 by default; pass a high limit so we don't
-  // silently truncate active agents. 10 000 covers any realistic workload.
-  const rows = listReceipts({ tokenId, limit: 10_000 });
+  const rows = listAllReceiptsForToken(tokenId);
   if (rows.length === 0) return "";
-  return rows.map((r) => JSON.stringify(r)).join("\n");
+  return rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
 }
 
 /**
@@ -40,16 +43,25 @@ export function exportAgentReceipts(tokenId: bigint): string {
  * tokenId comes out of JSON as a plain number (matching InferenceReceipt),
  * so no bigint re-coercion is needed — recordReceipt handles it via .toString().
  *
- * Returns the number of receipts imported.
+ * Malformed lines are skipped with a console.warn rather than aborting the
+ * whole import — better to restore most receipts than none.
+ *
+ * Returns the number of receipts successfully imported.
  */
 export function importAgentReceipts(ndjson: string): number {
-  let n = 0;
+  let n = 0, bad = 0, idx = 0;
   for (const line of ndjson.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const r = JSON.parse(trimmed) as InferenceReceipt;
-    recordReceipt(r);
-    n++;
+    const t = line.trim(); idx++;
+    if (!t) continue;
+    try {
+      const r = JSON.parse(t) as InferenceReceipt;
+      recordReceipt(r);
+      n++;
+    } catch (e) {
+      bad++;
+      console.warn(`[receipts] importAgentReceipts: skipping malformed line ${idx}: ${(e as Error).message}`);
+    }
   }
+  if (bad > 0) console.warn(`[receipts] importAgentReceipts: ${bad} malformed line(s) skipped, ${n} imported`);
   return n;
 }

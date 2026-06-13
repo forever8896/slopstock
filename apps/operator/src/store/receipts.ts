@@ -128,3 +128,18 @@ export function listReceipts(opts: ListReceiptsOpts = {}): InferenceReceipt[] {
     .all(...params, limit) as { receipt: string }[];
   return rows.map((row) => JSON.parse(row.receipt) as InferenceReceipt);
 }
+
+/**
+ * All receipts for a single agent (tokenId), UNBOUNDED — used by snapshot
+ * export only, NOT the rate-limited HTTP tape. Ordered by ts ASC so the
+ * exported tape reproduces the original chronological sequence.
+ *
+ * Never call this from the HTTP /receipts endpoint — use listReceipts()
+ * (which is capped at 500) for that path.
+ */
+export function listAllReceiptsForToken(tokenId: bigint): InferenceReceipt[] {
+  const rows = db()
+    .prepare("SELECT receipt FROM receipts WHERE tokenId = ? ORDER BY ts ASC")
+    .all(tokenId.toString()) as { receipt: string }[];
+  return rows.map((row) => JSON.parse(row.receipt) as InferenceReceipt);
+}

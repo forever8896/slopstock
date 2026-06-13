@@ -8,7 +8,7 @@
  */
 
 import { test, expect, beforeEach, beforeAll } from "bun:test";
-import { recordReceipt, listReceipts, __resetReceiptsDbForTest } from "./receipts.ts";
+import { recordReceipt, listReceipts, listAllReceiptsForToken, __resetReceiptsDbForTest } from "./receipts.ts";
 import { exportAgentReceipts, importAgentReceipts } from "./receipt-export.ts";
 import type { InferenceReceipt } from "@stratum/shared";
 
@@ -117,4 +117,40 @@ test("importAgentReceipts is idempotent (INSERT OR REPLACE)", () => {
   const rows = listReceipts({ tokenId: 7n });
   expect(rows).toHaveLength(1);
   expect(rows.at(0)?.callId).toBe("call-dup");
+});
+
+test(">500 receipts are not truncated by exportAgentReceipts", () => {
+  // Record 600 receipts for agent 42 — exceeds the 500-row HTTP cap.
+  for (let i = 0; i < 600; i++) {
+    recordReceipt({
+      ...fakeReceipt(`c-${i}`, 42),
+      // Give each receipt a distinct ts so ORDER BY ts ASC is stable.
+      ts: 1700000000 + i,
+    });
+  }
+
+  const ndjson = exportAgentReceipts(42n);
+  // Split on newline; trailing newline produces one empty element — filter it out.
+  const lines = ndjson.split("\n").filter((l) => l.trim() !== "");
+  expect(lines.length).toBe(600);
+  // Spot-check: every line parses and belongs to agent 42.
+  for (const line of lines) {
+    const r = JSON.parse(line);
+    expect(String(r.tokenId)).toBe("42");
+  }
+});
+
+test("importAgentReceipts skips malformed lines instead of throwing", () => {
+  const valid1 = JSON.stringify(fakeReceipt("good-1", 11));
+  const valid2 = JSON.stringify(fakeReceipt("good-2", 11));
+  const bad = "{ this is : not json";
+  const ndjson = [valid1, bad, valid2].join("\n") + "\n";
+
+  // Must not throw; must return 2 (the two valid receipts).
+  const count = importAgentReceipts(ndjson);
+  expect(count).toBe(2);
+
+  // Both valid receipts should be present in the DB.
+  const rows = listAllReceiptsForToken(11n);
+  expect(rows.map((r) => r.callId).sort()).toEqual(["good-1", "good-2"]);
 });
