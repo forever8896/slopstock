@@ -18,6 +18,12 @@ export interface AgentOffchainMeta {
    * the value stored on the iNFT's metadata for verification to succeed.
    */
   expectedTeeMeasurement: Hex;
+  /**
+   * Legacy agents from the pre-v2 build (April finalist). Kept on-chain as the
+   * continuity-track footprint + as x402 test fixtures, but hidden/labelled in
+   * the UI. The listing should filter or badge these. New agents omit this.
+   */
+  deprecated?: boolean;
 }
 
 export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
@@ -33,6 +39,7 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
     // ERC-7857 fork will swap this for a parsed TDX/SGX quote measurement.
     expectedTeeMeasurement:
       "0x3861e6d72751de965efb8993a0d96e38624b732ddc77a623d7c594ca807ffe37",
+    deprecated: true,
   },
   MEMER: {
     name: "memer",
@@ -43,6 +50,7 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
     perCallHuman: "$0.50",
     expectedTeeMeasurement:
       "0xcbb4e6f9d3c522ae5180e5390e3e0432694be771eaf76c8b7a5ebf9f26ce299d",
+    deprecated: true,
   },
   ORCL: {
     name: "oracles",
@@ -53,5 +61,6 @@ export const AGENT_METADATA: Record<string, AgentOffchainMeta> = {
     perCallHuman: "$0.10",
     expectedTeeMeasurement:
       "0x8d0bfe62c493067ecca0ecc71f046da079008c29dbc4beb0f6a1ebf690eeeba2",
+    deprecated: true,
   },
 };
