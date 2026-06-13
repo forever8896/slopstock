@@ -28,6 +28,8 @@ import { type AgentTaskInput } from "./types.ts";
 import type { SkillDoc, parseFrontmatter as _parseFrontmatter } from "./hermes.ts";
 import { parseFrontmatter } from "./hermes.ts";
 import { TOOL_REGISTRY, hashArgs, type ToolCtx } from "./hermes-tools.ts";
+import { buildSkillIndex } from "./skills.ts";
+import type { FrozenMemory } from "./memory-files.ts";
 
 const MAX_TURNS = 8;
 const MIN_TOOLS_FOR_SKILL = 3;
@@ -41,6 +43,7 @@ interface AgentStateLite {
    *  capabilities.tools; static (seed-driven) runtimes leave it undefined to
    *  expose the full TOOL_REGISTRY (preserves pre-Real-Agent-Launch behavior). */
   tools?: string[];
+  frozenMemory?: FrozenMemory; // Layer 1 — embedded once, frozen for the session
 }
 
 interface RunInput {
@@ -72,6 +75,46 @@ interface ChatMsg {
   content: string;
 }
 
+/** Assemble the (frozen-for-the-session) system prompt. Skills appear as a
+ *  Level-0 index only — bodies are pulled on demand via skill_view. Mirrors
+ *  Hermes Agent's SKILLS_GUIDANCE block (index + creation nudge). */
+export function buildSystemContent(opts: {
+  systemPrompt: string;
+  tools: { name: string; description: string }[];
+  skillIndex: string;
+  frozenMemory?: FrozenMemory;
+}): string {
+  const { systemPrompt, tools, skillIndex, frozenMemory } = opts;
+  const parts: string[] = [systemPrompt.trim(), ""];
+
+  if (frozenMemory && (frozenMemory.user.trim() || frozenMemory.memory.trim())) {
+    parts.push("── what you remember (read-only this session) ──────────────");
+    if (frozenMemory.user.trim()) parts.push(`USER:\n${frozenMemory.user.trim()}`);
+    if (frozenMemory.memory.trim()) parts.push(`MEMORY:\n${frozenMemory.memory.trim()}`);
+    parts.push("");
+  }
+
+  parts.push(
+    "── available tools ──────────────────────────────────────────",
+    tools.length === 0
+      ? "(none — emit your final answer directly)"
+      : tools.map((t) => `  - ${t.name}: ${t.description}`).join("\n"),
+    "",
+    "── how to call a tool ──────────────────────────────────────",
+    `Emit a JSON object: {"tool": "<name>", "args": { ... }}`,
+    "Nothing else. The runtime executes it and replies with the result on the next turn.",
+    "",
+    "── how to finish ───────────────────────────────────────────",
+    `Emit ONLY a final JSON answer (an object that does NOT have a "tool" key). No prose, no markdown fences. The exact schema lives in your role definition above.`,
+    "",
+    "── your skills (Level 0 index) ─────────────────────────────",
+    skillIndex,
+    `To read a skill's full body, call {"tool":"skill_view","args":{"name":"<stem>"}}. When you finish a task that took 5+ tool calls or where you found a non-obvious path, SAVE it: {"tool":"skill_manage","args":{"op":"create","name":"<title>","content":"<markdown>"}} — or 'edit' an existing skill to improve it.`,
+  );
+
+  return parts.filter((x) => x !== "").join("\n");
+}
+
 export async function runAgentLoop(input: RunInput): Promise<RunResult> {
   const { config, state, req } = input;
 
@@ -95,28 +138,12 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
   const toolList = allowedTools
     .map((name) => TOOL_REGISTRY[name])
     .filter((t): t is NonNullable<typeof t> => Boolean(t));
-  const systemContent = [
-    state.systemPrompt.trim(),
-    "",
-    "── available tools ──────────────────────────────────────────",
-    toolList.length === 0
-      ? "(none — emit your final answer directly)"
-      : toolList.map((t) => `  - ${t.name}: ${t.description}`).join("\n"),
-    "",
-    "── how to call a tool ──────────────────────────────────────",
-    `Emit a JSON object: {"tool": "<name>", "args": { ... }}`,
-    "Nothing else. The runtime executes it and replies with the result on the next turn.",
-    "",
-    "── how to finish ───────────────────────────────────────────",
-    `Emit ONLY a final JSON answer (an object that does NOT have a "tool" key). No prose, no markdown fences. The exact schema lives in your role definition above.`,
-    "",
-    state.skills.length > 0 ? "── your accumulated skills ────────────────────────────────" : "",
-    state.skills.length > 0
-      ? state.skills.map((s) => `▸ ${s.name}: ${s.frontmatter["description"] ?? ""}\n${s.body.slice(0, 4000)}`).join("\n\n")
-      : "",
-  ]
-    .filter((x) => x !== "")
-    .join("\n");
+  const systemContent = buildSystemContent({
+    systemPrompt: state.systemPrompt,
+    tools: toolList.map((t) => ({ name: t.name, description: t.description })),
+    skillIndex: buildSkillIndex(state.skills),
+    ...(state.frozenMemory ? { frozenMemory: state.frozenMemory } : {}),
+  });
 
   const messages: ChatMsg[] = [
     { role: "system", content: systemContent },
