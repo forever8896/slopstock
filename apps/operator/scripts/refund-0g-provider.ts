@@ -26,31 +26,31 @@ async function main() {
   const wallet = new ethers.Wallet(config.OPERATOR_PRIVATE_KEY, provider);
   const broker = await createZGComputeNetworkBroker(wallet);
 
-  // Try the broker's documented retrieveFund first.
-  // (Different SDK versions name this differently; we try a few.)
+  // SDK signatures (verified against @0gfoundation/0g-compute-ts-sdk):
+  //   ledger.retrieveFundFromProvider(serviceTypeStr, providerAddress, gasPrice?)
+  //   ledger.retrieveFund(serviceTypeStr, gasPrice?)   // ALL providers
+  // The serviceType is the STRING "inference" (not an array), and the 2nd/3rd
+  // positional arg is gasPrice — passing "inference" there throws
+  // "Failed to parse String to BigInt".
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const inf = broker.inference as any;
   const ledg = broker.ledger as any;
+  void AMOUNT; // retrieveFund pulls the full refundable sub-account balance
 
-  // Method 1: inference.retrieveFund
-  if (typeof inf.retrieveFund === "function") {
-    console.log("[refund] using inference.retrieveFund");
-    const arg = AMOUNT ? ethers.parseEther(AMOUNT) : undefined;
-    await inf.retrieveFund(PROVIDER, "inference", arg);
+  if (typeof ledg.retrieveFundFromProvider === "function") {
+    console.log(`[refund] ledger.retrieveFundFromProvider("inference", ${PROVIDER})`);
+    await ledg.retrieveFundFromProvider("inference", PROVIDER);
     console.log("[refund] done");
     return;
   }
-  // Method 2: ledger.retrieveFund (with serviceType)
   if (typeof ledg.retrieveFund === "function") {
-    console.log("[refund] using ledger.retrieveFund");
-    await ledg.retrieveFund([PROVIDER], "inference");
+    console.log('[refund] ledger.retrieveFund("inference") — all providers');
+    await ledg.retrieveFund("inference");
     console.log("[refund] done");
     return;
   }
 
-  console.error("[refund] no retrieveFund method on broker; available:");
-  console.error("  inference:", Object.keys(inf));
-  console.error("  ledger:   ", Object.keys(ledg));
+  console.error("[refund] no retrieveFund method on broker.ledger; available:");
+  console.error("  ledger:", Object.keys(ledg));
   process.exit(3);
 }
 
