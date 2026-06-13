@@ -44,6 +44,8 @@ import { loadFrozenMemory, type FrozenMemory } from "./memory-files.ts";
 import type { LLMBackend } from "./llm-backend.ts";
 import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput } from "./types.ts";
+import { snapshotAgentDir, restoreAgentDir } from "../storage/snapshot.ts";
+import { importKeyFromBase64, generateKey } from "../storage/crypto.ts";
 
 const SEED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../seed/agents");
 
@@ -78,6 +80,8 @@ interface BundleLock {
   bundleHash: Hex;
   version: number;
   lastUpdated: number;
+  /** Walrus blobId of the last encrypted snapshot (set after each state-changing task). */
+  walrusSnapshotBlobId?: string;
 }
 
 interface AgentState {
@@ -157,6 +161,35 @@ export class HermesAgentRuntime implements AgentRuntime {
     //   - Static (AUDIT / seed path): use AGENTS_DATA_DIR/<id>/ and copy
     //     from apps/operator/seed/agents/<id>/ on first run.
     const dir = this.manifestOverride?.agentDir ?? this.dirFor(opts.tokenId);
+
+    // Walrus snapshot restore: if the agent dir is missing (e.g. after amnesia
+    // wipe), try to restore from the latest Walrus snapshot before falling back
+    // to seed. Only applies when a snapshot blobId is recorded in the lock file
+    // *in the parent data dir* (which survives across data/agents/ wipes because
+    // it's stored in the lock alongside the agent state).
+    if (!this.manifestOverride && !existsSync(dir)) {
+      // Check if there's a snapshot blobId in any existing bundle.lock.json
+      // that might have been preserved (or in a sibling .snapshot file).
+      const snapshotFile = `${dir}.snapshot`;
+      if (existsSync(snapshotFile)) {
+        try {
+          const snapInfo = JSON.parse(await readFile(snapshotFile, "utf-8")) as {
+            walrusBlobId: string;
+          };
+          if (snapInfo.walrusBlobId) {
+            console.log(
+              `[hermes] restoring tokenId=${opts.tokenId} from Walrus snapshot ${snapInfo.walrusBlobId.slice(0, 16)}…`,
+            );
+            const snapKey = await getSnapshotKey();
+            await restoreAgentDir(dir, snapInfo.walrusBlobId, snapKey);
+            console.log(`[hermes] restore complete for tokenId=${opts.tokenId}`);
+          }
+        } catch (e) {
+          console.warn(`[hermes] snapshot restore failed, falling back to seed: ${(e as Error).message}`);
+        }
+      }
+    }
+
     await mkdir(join(dir, "skills"), { recursive: true });
     await mkdir(join(dir, "patterns"), { recursive: true });
 
@@ -275,13 +308,40 @@ export class HermesAgentRuntime implements AgentRuntime {
     // skills / memory back to disk.
     const bundleHashBefore = state.lock.bundleHash;
     const bundleHashAfter = await hashBundleDir(state.dir);
+    const stateChanged = bundleHashBefore !== bundleHashAfter;
     state.lock.bundleHash = bundleHashAfter;
-    state.lock.version += bundleHashBefore === bundleHashAfter ? 0 : 1;
+    state.lock.version += stateChanged ? 1 : 0;
     state.lock.lastUpdated = Date.now();
     await writeFile(
       join(state.dir, "bundle.lock.json"),
       JSON.stringify(state.lock, null, 2),
     );
+
+    // Walrus snapshot: asynchronously tar+encrypt+upload after each state-changing
+    // task. Non-blocking so it doesn't slow down the response to the subscriber.
+    if (stateChanged) {
+      getSnapshotKey()
+        .then((snapKey) => snapshotAgentDir(state.dir, snapKey))
+        .then(async (blobId) => {
+          state.lock.walrusSnapshotBlobId = blobId;
+          // Persist blobId in lock file (in-place update)
+          await writeFile(
+            join(state.dir, "bundle.lock.json"),
+            JSON.stringify(state.lock, null, 2),
+          );
+          // Also write a sibling .snapshot file so load() can find it after amnesia wipe
+          const snapshotFile = `${state.dir}.snapshot`;
+          await writeFile(snapshotFile, JSON.stringify({ walrusBlobId: blobId }));
+          console.log(
+            `[hermes] snapshot tokenId=${req.tokenId} → walrus:${blobId.slice(0, 16)}…`,
+          );
+        })
+        .catch((e) => {
+          console.warn(
+            `[hermes] snapshot failed for tokenId=${req.tokenId}: ${(e as Error).message}`,
+          );
+        });
+    }
 
     const inputBytes = new TextEncoder().encode(req.input);
     const outputBytes = new TextEncoder().encode(result.output);
@@ -332,6 +392,27 @@ function encodeBackendAttestation(
   return Buffer.from(
     `stratum-testnet-no-tee-quote:runtime=hermes:tokenId=${tokenId}:bundle=${bundleHash}:backend=${att.backend}:ts=${Date.now()}`,
   ).toString("base64");
+}
+
+// ─── snapshot key ─────────────────────────────────────────────────────────────
+
+let _snapshotKey: CryptoKey | null = null;
+
+/**
+ * Load (or generate) the AES-256-GCM key used for agent state snapshots.
+ * Key is read from AGENT_SNAPSHOT_KEY env var (base64url, 32 bytes).
+ * If unset a fresh key is generated per-process (snapshots only survive restarts
+ * if the env var is set — acceptable for testnet/hackathon).
+ */
+async function getSnapshotKey(): Promise<globalThis.CryptoKey> {
+  if (_snapshotKey) return _snapshotKey;
+  const b64 = process.env["AGENT_SNAPSHOT_KEY"];
+  if (b64) {
+    _snapshotKey = await importKeyFromBase64(b64);
+  } else {
+    _snapshotKey = await generateKey();
+  }
+  return _snapshotKey;
 }
 
 /** Read every Markdown file under <dir>/skills/, parse frontmatter. */
