@@ -343,16 +343,21 @@
   [data-motion="off"] .scan { display: none; }
 
   /* TEXT EFFECTS */
+  /* Left-to-right reveal via clip-path: the box keeps its full size from the
+     first frame (so line-wrapping is computed once and the text never shifts),
+     and the clip is horizontal-only with negative vertical insets so ascenders
+     and descenders are never cut. */
   .typewriter {
-    overflow: hidden; white-space: nowrap;
     display: inline-block;
-    border-right: 2px solid var(--accent);
-    animation: type 1.6s steps(40, end) 0.1s 1 both, caret 1s steps(2) infinite 1.7s;
+    white-space: nowrap;
     max-width: 100%;
+    animation: type 1.3s cubic-bezier(0.22, 0.7, 0.2, 1) 0.15s both;
   }
-  [data-motion="off"] .typewriter { animation: none; border-right: 0; }
-  @keyframes type { from { width: 0; } to { width: 100%; } }
-  @keyframes caret { 50% { border-color: transparent; } }
+  [data-motion="off"] .typewriter { animation: none; }
+  @keyframes type {
+    from { clip-path: inset(-0.15em 100% -0.3em 0); }
+    to   { clip-path: inset(-0.15em 0% -0.3em 0); }
+  }
 
   .muted { color: var(--mute); }
   .fg2 { color: var(--fg-2); }
