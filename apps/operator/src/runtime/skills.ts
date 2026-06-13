@@ -24,11 +24,12 @@ export function skillSlug(name: string): string {
 /** Insert or replace the `version:` line inside a frontmatter block. Wrap a
  *  minimal frontmatter if the doc has none. */
 export function upsertVersionLine(doc: string, version: number): string {
-  const fm = doc.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!fm) return `---\nversion: ${version}\n---\n${doc.trim()}\n`;
+  const normalized = doc.replace(/\r\n/g, "\n");
+  const fm = normalized.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!fm) return `---\nversion: ${version}\n---\n${normalized.trim()}\n`;
   let front = fm[1]!;
-  if (/^version:\s*\d+/m.test(front)) {
-    front = front.replace(/^version:\s*\d+.*$/m, `version: ${version}`);
+  if (/^version:\s*\S/m.test(front)) {
+    front = front.replace(/^version:.*$/m, `version: ${version}`);
   } else {
     front = `version: ${version}\n${front}`;
   }

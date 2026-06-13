@@ -40,6 +40,19 @@ describe("upsertVersionLine", () => {
     const out = upsertVersionLine("just a body", 1);
     expect(out.startsWith("---\nversion: 1\n---\n")).toBe(true);
   });
+  test("normalizes CRLF frontmatter instead of double-wrapping", () => {
+    const out = upsertVersionLine("---\r\nname: x\r\n---\r\nbody", 2);
+    expect(out).toContain("version: 2");
+    expect(out).toContain("name: x");
+    expect(out).not.toContain("\r");
+    // exactly one frontmatter delimiter pair (no double-wrap)
+    expect(out.match(/^---$/gm)?.length).toBe(2);
+  });
+  test("replaces a non-numeric existing version (no duplicate key)", () => {
+    const out = upsertVersionLine("---\nversion: abc\nname: x\n---\nbody", 3);
+    expect(out).toContain("version: 3");
+    expect(out.match(/^version:/gm)?.length).toBe(1);
+  });
 });
 
 describe("ensureSkillFrontmatter", () => {
