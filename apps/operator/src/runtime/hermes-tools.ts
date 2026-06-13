@@ -254,6 +254,9 @@ const note: ToolDef = {
     ctx.db
       .prepare("INSERT OR REPLACE INTO facts(key, value, ts) VALUES (?, ?, ?)")
       .run(key, value, Math.floor(Date.now() / 1000));
+    // Mirror the fact into human-readable Layer-1 memory so it persists into
+    // the next session's frozen system prompt (and into Walrus snapshots).
+    await appendMemoryLine(ctx.agentDir, `${key}: ${value}`).catch(() => {});
     return { text: `noted: ${key}`, resultSummary: `wrote fact: ${key}` };
   },
 };

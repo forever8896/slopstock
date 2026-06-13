@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { TOOL_REGISTRY, type ToolCtx } from "./hermes-tools.ts";
 import { readSkillBody } from "./skills.ts";
 
@@ -48,4 +50,18 @@ describe("skill_manage / skills_list / skill_view round-trip", () => {
     const r = await TOOL_REGISTRY["skill_view"]!.handler({ name: "ghost" }, ctx);
     expect(r.resultSummary).toContain("miss");
   });
+});
+
+test("note appends to MEMORY.md as well as the facts table", async () => {
+  const ctx = await ctxWithDir();
+  const db = new Database(":memory:");
+  db.exec("CREATE TABLE facts (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts INTEGER NOT NULL);");
+  (ctx as { db: Database }).db = db;
+
+  await TOOL_REGISTRY["note"]!.handler({ key: "oracle-rule", value: "prefer TWAP" }, ctx);
+
+  const raw = await readFile(join(ctx.agentDir, "MEMORY.md"), "utf-8");
+  expect(raw).toContain("oracle-rule: prefer TWAP");
+  const row = db.prepare("SELECT value FROM facts WHERE key = ?").get("oracle-rule") as { value: string };
+  expect(row.value).toBe("prefer TWAP");
 });
