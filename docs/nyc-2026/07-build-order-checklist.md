@@ -35,6 +35,7 @@ Everything testable on testnet/free first; mainnet is a flip at the end.
 ## Phase 3 — Integration loop (Sat evening) — merge trunk-first, verify each
 - [ ] `bun test` full suite green.
 - [ ] `smoke-hermes` (deepseek-v3 brain) green.
+- [ ] `smoke-hermes` shows Hermes fidelity: Level-0 skill index (no body dump), `skill_view`/`skill_manage` used, skill improves in place (re-run bumps `version:` not a new file), `MEMORY.md` written. ([08](08-hermes-fidelity.md))
 - [ ] `smoke-agent-to-agent` via ENS resolution + ENSIP-25 verify.
 - [ ] ⚠️ **Mainnet flip** (`NETWORK=mainnet`) once funded; guard passes.
 - [ ] Inbound: a real x402 v2 payment to AUDIT on mainnet.
