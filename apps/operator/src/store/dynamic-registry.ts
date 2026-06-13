@@ -155,6 +155,14 @@ export async function attachEnsName(
   return updated;
 }
 
+/** Test-only: clear the in-memory dynamic registry. */
+export function clearDynamicRegistryForTest(): void {
+  cache.clear();
+  loaded = false;
+  registryPath = null;
+  setDynamicSnapshot(new Map());
+}
+
 /**
  * Permanently remove a dynamic agent from the registry. The on-chain iNFT,
  * vault, IPO, and ShareToken still exist — this only affects the operator's
