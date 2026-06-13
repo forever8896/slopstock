@@ -91,3 +91,7 @@ ml/eval/results/
 *.swp
 .vercel
 .playwright-mcp/
+
+# never commit .env backups (may hold secrets)
+.env.bak*
+.env.*.bak
