@@ -26,6 +26,7 @@ import { buildReceiptSigner } from "./compute/receipt.ts";
 import { loadConfig } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
 import { buildMcpServer } from "./mcp/server.ts";
+import { flushPendingPointers } from "./runtime/hermes.ts";
 import { buildRuntimeRouter } from "./runtime/index.ts";
 import { initRegistry, listDynamicAgents } from "./store/dynamic-registry.ts";
 process.stderr.write(`[boot] modules imported.\n`);
@@ -100,6 +101,12 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     console.log(`[stratum/operator] ${signal} received, shutting down`);
+    console.log(`[operator] ${signal} received — flushing pending ENS snapshot pointers…`);
+    try {
+      await flushPendingPointers();
+    } catch (e) {
+      console.warn(`[operator] pointer flush failed: ${(e as Error).message}`);
+    }
     httpServer.stop();
     await mcpServer.close();
     process.exit(0);
