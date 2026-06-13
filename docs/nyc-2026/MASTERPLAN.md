@@ -9,7 +9,7 @@
 > status change, update the row here** (and the linked doc). Consult master ⇄ plan
 > docs to catch drift. If a plan exists only in someone's head, it's a bug — write it.
 >
-> Last reconciled: 2026-06-13 · test health: **61 pass / 0 fail** (`bun test packages/shared apps/operator`).
+> Last reconciled: 2026-06-13 · test health: **63 pass / 0 fail** (`bun test packages/shared apps/operator`).
 
 ---
 
@@ -42,7 +42,7 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 | 05 | [x402-v2](05-x402-v2.md) | ✅ done | all 3 legs real v2, verified live; homegrown deleted; smokes left | live mainnet Exa (needs ~$1 mainnet USDC) — optional |
 | 06 | [revenue-and-economics](06-revenue-and-economics.md) | 🟡 partial | x402 settle works | revenue split + P&L, mainnet rails deploy (IPO gated), LI.FI self-funding top-up, **cost-display UX** (below), GTM/sell-at-venue |
 | 07 | [build-order-checklist](07-build-order-checklist.md) | 🟡 living | the execution sequence + stop-losses | keep in sync as phases complete |
-| 08 | [hermes-fidelity](08-hermes-fidelity.md) | 🟢 mostly done | commits `a1dd1eb`→`c8bde95`: skills.ts, memory-files.ts, progressive disclosure, skill_manage, Layer-1 memory, 5+tool trigger; tests green | verify all 8 tasks complete vs doc checklist; wire into Walrus amnesia demo |
+| 08 | [hermes-fidelity](08-hermes-fidelity.md) | ✅ done | all 9 plan tasks + 3 review fixes, commits `a1dd1eb`→`006f4e3` (docs `94c90fc`): progressive disclosure (Level-0 index, **no body dump**), `skill_manage` create/edit/delete, slug-keyed upsert (**self-improves in place**), Layer-1 `MEMORY.md`/`USER.md`, 5+tool/error-recovery trigger, per-`runTask` skill+memory reload; **50/50 operator tests green**, final review SHIP-READY | live `smoke-hermes` on 0G brain (needs funding); wire `MEMORY.md` into Walrus amnesia demo ([03](03-walrus.md)) |
 | 09 | [agent-secrets](09-agent-secrets.md) | 🟢 decided | credential≠LLM-context principle; tiers x402-native → operator-env → 1Claw → TEE-sealed | Tier 1 (operator env) builds w/ drill-cypher; Tier 2 = **talk to Kevin/1Claw** at venue |
 | 13 | [platform-split (web)](../13-platform-split-landing-docs.md) | 🟡 in-flight | daylight redesign, landing/app/docs split; commits + uncommitted `apps/web/*` | finish redesign; **read `deprecated` flag to hide legacy agents** |
 
@@ -74,7 +74,7 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 
 ## Workstreams (who/what is moving in parallel)
 - **Protocol layer** (Claude): network switch ✅, x402 v2 ✅, walrus client 🟡 — building bounty integrations next.
-- **Hermes harness** (Kilian/agents): real-Hermes fidelity 🟢 — see [08](08-hermes-fidelity.md).
+- **Hermes harness**: real-Hermes fidelity ✅ (Claude, this session) — see [08](08-hermes-fidelity.md). Only live smoke + Walrus-amnesia wiring remain.
 - **Web redesign** (Kilian): platform split / daylight 🟡 — [13](../13-platform-split-landing-docs.md). Claude stays out of `apps/web/*` to avoid collision unless asked.
 
 ## Maintenance rule
