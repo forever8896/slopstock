@@ -9,6 +9,8 @@ import {
   serializeEnvelope,
   deserializeEnvelope,
   importKeyFromBase64,
+  generateKey,
+  exportKeyToBase64,
 } from "./crypto.ts";
 import { SealCipher } from "./seal.ts";
 
@@ -49,6 +51,6 @@ export async function getSnapshotCipher(): Promise<SnapshotCipher> {
   if (mode === "seal") return SealCipher.fromEnv();
   const b64 = process.env["AGENT_SNAPSHOT_KEY"];
   if (b64) return AesCipher.fromBase64(b64);
-  const { generateKey, exportKeyToBase64 } = await import("./crypto.ts");
+  console.warn("[operator] AGENT_SNAPSHOT_KEY unset — using ephemeral key; snapshots will not survive restart");
   return AesCipher.fromBase64(await exportKeyToBase64(await generateKey()));
 }
