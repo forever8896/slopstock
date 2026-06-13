@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { buildSystemContent } from "./hermes-loop.ts";
+import { buildSystemContent, sawErrorRecovery } from "./hermes-loop.ts";
+import type { AgentStep } from "@stratum/shared";
 
 describe("buildSystemContent", () => {
   const tools = [{ name: "parse_ast", description: "scan" }, { name: "skill_view", description: "read a skill" }];
@@ -33,5 +34,21 @@ describe("buildSystemContent", () => {
       systemPrompt: "ROLE", tools, skillIndex: "(no skills yet)", frozenMemory: { memory: "", user: "" },
     });
     expect(out).not.toContain("what you remember");
+  });
+});
+
+const tstep = (resultSummary: string): AgentStep => ({
+  kind: "tool", tool: "x", argsHash: "0x", resultSummary, ts: 0,
+});
+
+describe("sawErrorRecovery", () => {
+  test("true when a success follows a prior tool error", () => {
+    expect(sawErrorRecovery([tstep("threw: boom"), tstep("12 fns, 3 ext calls")])).toBe(true);
+  });
+  test("false when no errors", () => {
+    expect(sawErrorRecovery([tstep("ok"), tstep("ok")])).toBe(false);
+  });
+  test("false when the only error is the last step", () => {
+    expect(sawErrorRecovery([tstep("ok"), tstep("pay failed: 0xabc")])).toBe(false);
   });
 });

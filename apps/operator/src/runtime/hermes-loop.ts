@@ -13,9 +13,9 @@
  * auto-creation runs after the loop if the task involved enough tool
  * calls (≥ MIN_TOOLS_FOR_SKILL).
  *
- * Skills are loaded into the system prompt at task start. We don't do
- * per-turn skill matching for v1 — total skill body should fit in the
- * model's context. (Future: top-K retrieval if a skill set grows.)
+ * Skills are surfaced as a Level-0 index (name + description) in the system
+ * prompt; the agent pulls full bodies on demand via the skill_view tool
+ * (progressive disclosure). After a hard task it creates/improves a skill.
  */
 
 import { writeFile } from "node:fs/promises";
@@ -28,11 +28,11 @@ import { type AgentTaskInput } from "./types.ts";
 import type { SkillDoc, parseFrontmatter as _parseFrontmatter } from "./hermes.ts";
 import { parseFrontmatter } from "./hermes.ts";
 import { TOOL_REGISTRY, hashArgs, type ToolCtx } from "./hermes-tools.ts";
-import { buildSkillIndex } from "./skills.ts";
+import { buildSkillIndex, upsertSkill } from "./skills.ts";
 import type { FrozenMemory } from "./memory-files.ts";
 
 const MAX_TURNS = 8;
-const MIN_TOOLS_FOR_SKILL = 3;
+const MIN_TOOLS_FOR_SKILL = 5; // was 3 — match real Hermes Agent's 5+ trigger
 
 interface AgentStateLite {
   dir: string;
@@ -113,6 +113,21 @@ export function buildSystemContent(opts: {
   );
 
   return parts.filter((x) => x !== "").join("\n");
+}
+
+/** Did the agent hit a tool error and then recover with a later success? Real
+ *  Hermes treats "found the working path after a dead end" as skill-worthy,
+ *  independent of raw tool count. Summaries flagged by the loop as errors use
+ *  words like error/fail/threw/unknown/miss. */
+export function sawErrorRecovery(transcript: AgentStep[]): boolean {
+  let sawError = false;
+  for (const s of transcript) {
+    if (s.kind !== "tool") continue;
+    const errored = /error|fail|threw|unknown|not whitelisted|\bmiss\b/i.test(s.resultSummary);
+    if (errored) sawError = true;
+    else if (sawError) return true;
+  }
+  return false;
 }
 
 export async function runAgentLoop(input: RunInput): Promise<RunResult> {
@@ -297,9 +312,12 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     );
   }
 
-  // Skill auto-creation if this was a "complex" task.
+  // Skill auto-creation/improvement after a "hard" task. Slug-keyed upsert means
+  // a recurring task type UPDATES its skill in place (self-improvement) instead
+  // of spawning skill-<uuid>.md duplicates.
   const skillsCreated: string[] = [];
-  if (toolCallCount >= MIN_TOOLS_FOR_SKILL && finalAnswer) {
+  const skillWorthy = toolCallCount >= MIN_TOOLS_FOR_SKILL || sawErrorRecovery(transcript);
+  if (skillWorthy && finalAnswer) {
     try {
       const skill = await synthesizeSkill(input.backend, {
         userInput: req.input,
@@ -307,11 +325,11 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
         finalAnswer,
       });
       if (skill) {
-        const fname = `skill-${crypto.randomUUID().slice(0, 8)}.md`;
-        await writeFile(join(state.dir, "skills", fname), skill, "utf-8");
-        const name = fname.replace(/\.md$/, "");
-        skillsCreated.push(name);
-        transcript.push({ kind: "skill_create", skill: name, ts: Math.floor(Date.now() / 1000) });
+        const declaredName =
+          skill.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? `skill-${callId.slice(0, 8)}`;
+        const res = await upsertSkill(state.dir, declaredName, skill);
+        skillsCreated.push(res.stem);
+        transcript.push({ kind: "skill_create", skill: res.stem, ts: Math.floor(Date.now() / 1000) });
       }
     } catch {
       // Non-fatal; the audit still ships.
