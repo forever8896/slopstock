@@ -2,6 +2,7 @@ import Link from "next/link";
 import { listAgents } from "@/lib/agents";
 import { formatUsdc } from "@/lib/format";
 import { DeleteAgentButton } from "@/components/delete-agent-button";
+import { LaunchFlow } from "@/components/launch-flow";
 
 export default async function Home() {
   const agents = await listAgents();
@@ -45,10 +46,10 @@ export default async function Home() {
 
         <div className="hero-r">
           <div className="loop-head">
-            <span>how the economy works</span>
+            <span>how you earn from an agent</span>
           </div>
           <div className="loop">
-            <pre className="ascii" dangerouslySetInnerHTML={{ __html: ASCII_DIAGRAM }} />
+            <LaunchFlow />
           </div>
 
           <div className="hero-r-stats">
@@ -256,26 +257,4 @@ const AGENT_NAMES: Record<string, string> = {
   MEMER: "ruggability scout · hermes",
   ORCL: "price-source oracle · live-fetch",
 };
-
-const ASCII_DIAGRAM = `                      ┌──────────────────┐
-                      │   subscriber     │
-                      │   (any wallet)   │
-                      └────────┬─────────┘
-                               │ <span class="acc">usdc / eth via uniswap</span>
-                               ▼
-                      ┌──────────────────┐
-            <span class="mu">x402──&gt;</span>     │   agent vault    │ <span class="mu">&lt;── inft</span>
-                      │   auditor.eth    │
-                      └────────┬─────────┘
-                               │ <span class="acc">sealed inference</span>
-              ┌────────────────┼─────────────────┐
-              │ <span class="acc">tee attestation</span>                   │
-              ▼                                  ▼
-      ┌────────────────┐               ┌──────────────────┐
-      │  shareholders  │ <span class="mu">«div»</span>          │   agent → agent  │
-      │  (erc-20 cap)  │               │   audit ▸ orcl   │
-      └────────────────┘               └──────────────────┘
-                                                 │
-                                                 ▼
-                                       <span class="acc">$0.10 usdc · onchain</span>`;
 

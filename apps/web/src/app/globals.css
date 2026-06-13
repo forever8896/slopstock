@@ -1955,3 +1955,139 @@ select:focus {
   .m-stat-strip { grid-template-columns: 1fr; }
   .m-footer { flex-direction: column; gap: 14px; text-align: center; }
 }
+
+/* ─── "How you earn from an agent" animated explainer (hero panel) ── */
+.lf { display: flex; flex-direction: column; gap: 16px; }
+
+/* step rail */
+.lf-rail { display: flex; align-items: center; gap: 0; }
+.lf-step {
+  flex: 1; display: flex; align-items: center; gap: 7px;
+  position: relative; opacity: 0.42; transition: opacity 0.4s ease; min-width: 0;
+}
+.lf-step::after {
+  content: ""; position: absolute; right: 6px; top: 50%; width: 0; height: 1px;
+  background: var(--accent); transition: width 0.4s ease;
+}
+.lf-step:not(:last-child) { padding-right: 22px; }
+.lf-step.on, .lf-step.done { opacity: 1; }
+.lf-step.done::after, .lf-step.on::after { width: 14px; }
+.lf-step-n {
+  font-family: var(--font-mono), monospace; font-size: 12px; font-weight: 700;
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--hair); color: var(--mute); transition: all 0.35s ease;
+}
+.lf-step.on .lf-step-n {
+  color: #fff; background: var(--accent); border-color: var(--accent);
+  box-shadow: 0 0 14px rgba(26, 77, 255, 0.4);
+}
+.lf-step.done .lf-step-n { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-tint); }
+.lf-step-l { font-size: 13px; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lf-step:not(.on):not(.done) .lf-step-l { color: var(--mute); }
+
+/* stage */
+.lf-stage {
+  min-height: 178px; display: flex; align-items: center; justify-content: center;
+  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius);
+  padding: 22px 20px; overflow: hidden;
+}
+.lf-scene { width: 100%; animation: lfRise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes lfRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* 01 launch — agent card with price */
+.lf-card { max-width: 290px; margin: 0 auto; }
+.lf-card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.lf-tk { font-family: var(--font-mono), monospace; font-weight: 700; font-size: 26px; letter-spacing: 0.01em; color: var(--fg); }
+.lf-tag {
+  font-family: var(--font-mono), monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--accent); background: var(--accent-tint); border: 1px solid var(--accent-dim);
+  padding: 2px 8px; border-radius: 6px;
+}
+.lf-name { font-size: 15px; color: var(--fg-2); margin-bottom: 16px; }
+.lf-price { display: flex; align-items: baseline; gap: 8px; }
+.lf-price-v {
+  font-family: var(--font-mono), monospace; font-weight: 700; font-size: 30px; color: var(--accent);
+  animation: lfPop 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) 0.15s both;
+}
+.lf-price-l { font-size: 14px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.12em; }
+@keyframes lfPop { from { opacity: 0; transform: scale(0.82); } to { opacity: 1; transform: none; } }
+
+/* 02 get paid — payments flowing into the agent */
+.lf-pay { text-align: center; }
+.lf-pay-agent {
+  font-family: var(--font-mono), monospace; font-weight: 700; font-size: 24px; color: var(--fg);
+  margin-bottom: 14px;
+}
+.lf-pay-stack { display: flex; justify-content: center; gap: 10px; margin-bottom: 14px; min-height: 34px; }
+.lf-pay-chip {
+  font-family: var(--font-mono), monospace; font-weight: 700; font-size: 15px; color: var(--up);
+  background: rgba(15, 159, 106, 0.08); border: 1px solid rgba(15, 159, 106, 0.3);
+  padding: 5px 12px; border-radius: 9px;
+  animation: lfFloat 1.9s ease-out infinite both;
+}
+@keyframes lfFloat {
+  0% { opacity: 0; transform: translateY(16px) scale(0.9); }
+  22% { opacity: 1; transform: translateY(0) scale(1); }
+  78% { opacity: 1; transform: translateY(-4px); }
+  100% { opacity: 0; transform: translateY(-14px); }
+}
+.lf-pay-sub { font-size: 14px; color: var(--fg-2); }
+
+/* 03 vault fills */
+.lf-vault { max-width: 300px; margin: 0 auto; width: 100%; }
+.lf-vault-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.lf-vault-label { font-size: 13px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--mute); }
+.lf-vault-amt {
+  font-family: var(--font-mono), monospace; font-weight: 700; font-size: 26px; color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  animation: lfPop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.7s both;
+}
+.lf-vault-box {
+  height: 56px; border-radius: 11px; background: var(--panel-2); border: 1px solid var(--hair);
+  overflow: hidden; display: flex; align-items: flex-end;
+}
+.lf-vault-fill {
+  display: block; width: 100%; height: 100%;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  transform-origin: bottom; animation: lfFillY 1.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes lfFillY { from { transform: scaleY(0); } to { transform: scaleY(0.74); } }
+.lf-vault-sub { margin-top: 10px; font-size: 13px; color: var(--fg-2); }
+
+/* 04 ipo — sell shares, builder collects */
+.lf-ipo { max-width: 300px; margin: 0 auto; width: 100%; }
+.lf-ipo-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font-size: 14px; color: var(--fg); }
+.lf-ipo-price { font-family: var(--font-mono), monospace; color: var(--fg-2); }
+.lf-bar { height: 12px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--hair); overflow: hidden; }
+.lf-bar-fill {
+  display: block; height: 100%; width: 72%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  transform-origin: left; animation: lfFill 1.2s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes lfFill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.lf-ipo-earn {
+  margin-top: 11px; font-size: 15px; color: var(--fg);
+  animation: lfPop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.8s both;
+}
+.lf-ipo-arrow { color: var(--accent); font-weight: 700; }
+.lf-ipo-earn b { font-family: var(--font-mono), monospace; color: var(--accent); font-size: 17px; }
+.lf-holders { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.lf-h {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent-tint); border: 1px solid var(--accent-dim);
+  animation: lfPop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.lf-h-more { font-size: 12px; color: var(--mute); margin-left: 4px; }
+
+/* caption */
+.lf-caption {
+  margin: 0; min-height: 40px; font-size: 14px; line-height: 1.45; color: var(--fg-2);
+  animation: lfRise 0.45s ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lf-scene, .lf-price-v, .lf-pay-chip, .lf-vault-fill, .lf-vault-amt, .lf-bar-fill,
+  .lf-ipo-earn, .lf-h, .lf-caption { animation: none !important; }
+  .lf-bar-fill { transform: scaleX(1); }
+  .lf-vault-fill { transform: scaleY(0.74); }
+}
