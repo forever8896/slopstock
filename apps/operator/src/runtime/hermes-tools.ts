@@ -27,6 +27,7 @@ import { BASE_SEPOLIA_AGENTS, USDC_BASE_SEPOLIA } from "@stratum/shared";
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { agentWalletFor } from "./agent-wallet.ts";
+import { createAgentPayFetch, exaSearch, formatHits } from "./x402-outbound.ts";
 
 type Hex = `0x${string}`;
 
@@ -873,6 +874,44 @@ const imageGenTool: ToolDef = {
   },
 };
 
+/**
+ * web_search — the OUTBOUND leg: the agent autonomously pays a real external
+ * x402 service (Exa) to search for exploits/CVEs mid-audit. ~$0.007 USDC per
+ * call, paid from the agent's own wallet via x402 v2. (Exa is on Base mainnet —
+ * the agent wallet needs USDC on mainnet to pay it for real.)
+ */
+const webSearchTool: ToolDef = {
+  name: "web_search",
+  description:
+    "Search the web for known exploits, CVEs, or vulnerability patterns relevant " +
+    "to the code under audit. Pays ~$0.007 USDC autonomously from your agent wallet " +
+    "(x402). Use when external knowledge would confirm or refute a finding.",
+  argsSchema: {
+    type: "object",
+    properties: { query: { type: "string", description: "search query" } },
+    required: ["query"],
+  },
+  async handler(args, ctx) {
+    const query = String(args["query"] ?? "").trim();
+    if (!query) return { text: "web_search needs a 'query' argument.", resultSummary: "no query" };
+    const account = agentWalletFor(ctx.config.OPERATOR_PRIVATE_KEY as Hex, ctx.callerTokenId);
+    try {
+      const hits = await exaSearch(createAgentPayFetch(account), query, 3);
+      return {
+        text: formatHits(hits),
+        resultSummary: `web_search "${query.slice(0, 40)}" → ${hits.length} hits`,
+        meta: { query, count: hits.length },
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        text: `web_search failed: ${msg.slice(0, 200)}\n(agent wallet ${account.address} needs USDC on Base mainnet to pay Exa.)`,
+        resultSummary: "web_search failed",
+      };
+    }
+  },
+};
+
 export const TOOL_REGISTRY: Record<string, ToolDef> = {
   parse_ast: parseAst,
   pattern_search: patternSearch,
@@ -882,6 +921,7 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
   fetch_url: fetchUrlTool,
   onchain_read: onchainReadTool,
   image_gen: imageGenTool,
+  web_search: webSearchTool,
 };
 
 // `encodeFunctionData` and `parseUnits` are imported but only used inside
