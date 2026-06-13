@@ -47,10 +47,17 @@ import {
 import {
   TEMPLATE_LIST,
   computeManifestHash,
+  getNetwork,
   validateManifest,
   type AgentManifest,
 } from "@stratum/shared";
-import { build402Response, parsePaymentHeader, type PaymentChallenge, validateReceipt } from "./x402.ts";
+import {
+  buildAgentPaymentRequirements,
+  createFacilitator,
+  requirePayment,
+  settlePayment,
+  settleResponseHeader,
+} from "./x402-v2.ts";
 
 export interface HttpDeps {
   config: OperatorConfig;
@@ -62,6 +69,11 @@ export interface HttpDeps {
   agentNftAddress: `0x${string}`;
   agentRegistryAddress: `0x${string}`;
 }
+
+// x402 v2: one facilitator client for the selected network (testnet keyless /
+// mainnet CDP). getNetwork() is memoized; the asset + network id come from it.
+const x402Net = getNetwork();
+const x402Facilitator = createFacilitator(x402Net);
 
 /**
  * In-memory tracking of in-flight x402 inference calls. /x402/infer kicks
@@ -129,8 +141,8 @@ function pruneFinanceInFlight(): void {
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, X-PAYMENT-V1-RESPONSE",
-  "Access-Control-Expose-Headers": "X-PAYMENT-V1",
+  "Access-Control-Allow-Headers": "Content-Type, PAYMENT-SIGNATURE, X-PAYMENT",
+  "Access-Control-Expose-Headers": "PAYMENT-REQUIRED, PAYMENT-RESPONSE, X-PAYMENT-RESPONSE",
 };
 
 function withCors(res: Response): Response {
@@ -717,34 +729,43 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   }
   const pricing = priceForToken(tokenId);
 
-  const challenge: PaymentChallenge = {
-    network: "base",
-    asset: "USDC",
-    amount: pricing.perCallSmallest,
-    recipient,
-  };
+  // x402 v2: build spec requirements (network + asset from getNetwork()) and gate
+  // the request through the facilitator. No payment → 402 with PAYMENT-REQUIRED.
+  const resource = req.url;
+  const requirements = buildAgentPaymentRequirements(x402Net, {
+    priceSmallest: pricing.perCallSmallest,
+    payTo: recipient,
+    resource,
+  });
+  const gate = await requirePayment({
+    paymentHeader: req.headers.get("PAYMENT-SIGNATURE") ?? req.headers.get("X-PAYMENT"),
+    resource,
+    requirements,
+    facilitator: x402Facilitator,
+  });
+  if (!gate.ok) return gate.response;
 
-  const receipt = parsePaymentHeader(req.headers.get("X-PAYMENT-V1-RESPONSE"));
-  if (!receipt) return build402Response(challenge);
-
-  // Need full body now for the actual inference.
+  // Payment verified. Require the full body before we settle — don't charge for
+  // a malformed request.
   if (!body.input || !body.subscriber) {
     return new Response(JSON.stringify({ error: "input and subscriber required" }), { status: 400 });
   }
 
-  const validation = await validateReceipt(receipt, challenge, deps.config, deps.clients);
-  if (!validation.ok) {
-    return new Response(JSON.stringify({ error: validation.reason }), {
+  // Settle now (prepaid-API model): standard x402 clients expect settlement on
+  // the paid response, and inference runs async (returns a callId to poll).
+  const settle = await settlePayment({ facilitator: x402Facilitator, payload: gate.payload, requirements });
+  if (!settle.success) {
+    return new Response(JSON.stringify({ error: `settlement failed: ${settle.errorReason ?? "unknown"}` }), {
       status: 402,
-      headers: { "Content-Type": "application/json", "X-PAYMENT-V1": JSON.stringify(challenge) },
+      headers: { "Content-Type": "application/json" },
     });
   }
 
   const callId = crypto.randomUUID();
   const subscriber = body.subscriber;
 
-  // Validation passed. Kick the runtime off in the BACKGROUND and return
-  // immediately with the callId. Client polls /x402/calls/:callId.
+  // Kick the runtime off in the BACKGROUND; return immediately with the callId
+  // plus the settlement response header. Client polls /x402/calls/:callId.
   inFlight.set(callId, {
     status: "running",
     tokenId: tokenId.toString(),
@@ -759,10 +780,13 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
     tokenId,
     subscriber,
     input: body.input,
-    paymentReceiptId: validation.receiptId,
+    paymentReceiptId: settle.transaction || (gate.payer ?? "x402v2"),
   });
 
-  return json({ ok: true, status: "running", callId });
+  return json(
+    { ok: true, status: "running", callId, settlementTx: settle.transaction },
+    { headers: { "PAYMENT-RESPONSE": settleResponseHeader(settle) } },
+  );
 }
 
 interface AsyncInferArgs {

@@ -17,9 +17,8 @@ import {
   encodePaymentRequiredHeader,
   encodePaymentResponseHeader,
 } from "@x402/core/http";
-import { HTTPFacilitatorClient } from "@x402/core/server";
+import { HTTPFacilitatorClient, type FacilitatorClient } from "@x402/core/server";
 import type {
-  FacilitatorClient,
   PaymentPayload,
   PaymentRequired,
   PaymentRequirements,

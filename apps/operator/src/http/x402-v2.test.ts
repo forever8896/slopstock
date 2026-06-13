@@ -155,14 +155,14 @@ describe("settlePayment", () => {
   const payload = { x402Version: 2, accepted: requirements, payload: {} } as never;
 
   test("returns the on-chain txHash on successful settlement", async () => {
-    const facilitator = { settle: async () => ({ success: true, transaction: "0xabc123", payer: "0x1" }) };
+    const facilitator = { settle: async () => ({ success: true, transaction: "0xabc123", payer: "0x1" } as never) };
     const r = await settlePayment({ facilitator, payload, requirements });
     expect(r.success).toBe(true);
     expect(r.transaction).toBe("0xabc123");
   });
 
   test("reports failure (does not throw) when settlement fails", async () => {
-    const facilitator = { settle: async () => ({ success: false, transaction: "", errorReason: "expired" }) };
+    const facilitator = { settle: async () => ({ success: false, transaction: "", errorReason: "expired" } as never) };
     const r = await settlePayment({ facilitator, payload, requirements });
     expect(r.success).toBe(false);
   });
