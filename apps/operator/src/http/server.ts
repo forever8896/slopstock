@@ -45,7 +45,6 @@ import {
   OgStorageNotFoundError,
 } from "../storage/og-storage-impl.ts";
 import {
-  TEMPLATE_LIST,
   getNetwork,
 } from "@stratum/shared";
 import {
@@ -201,10 +200,6 @@ export function startHttpServer(deps: HttpDeps) {
 
       if (url.pathname === "/agents/test" && req.method === "POST") {
         return withCors(await handleTestAgent(req, deps));
-      }
-
-      if (url.pathname === "/templates" && req.method === "GET") {
-        return withCors(json({ templates: TEMPLATE_LIST }));
       }
 
       if (url.pathname === "/og-storage/pin" && req.method === "POST") {

@@ -233,7 +233,7 @@ export class ToolsLiteRuntime implements AgentRuntime {
           status: "incomplete",
           note: "agent did not reach a final answer within turn limit",
           llmCalls: llmCallsMade,
-          template: this.opts.manifest.manifest.brain.templateId,
+          template: "legacy",
         },
         null,
         2,

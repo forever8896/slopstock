@@ -51,8 +51,6 @@ export interface DynamicAgent {
   //     agents. See docs/12-real-agent-launch.md. ────────────────────────
   /** keccak256 of canonical(manifest), no `0x` prefix. Equals iNFT.metadataHash. */
   bundleManifestCid?: string;
-  /** Capability template id (e.g. "cross-agent-orchestrator"). Surfaced in UI. */
-  templateId?: string;
   /** Runtime tier picked at mint. Routes to openai-compat | tools-lite | hermes. */
   runtimeTier?: "openai-compat" | "tools-lite" | "hermes";
   /** Defensive copy of the full manifest. Used when 0G Storage pull fails;

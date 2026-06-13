@@ -176,7 +176,7 @@ export async function loadAndMaterialize(opts: LoadManifestOpts): Promise<Materi
     // so the Hermes skill-loader can parse it.
     const body = s.body.startsWith("---\n")
       ? s.body
-      : `---\nname: ${s.name}\ndescription: from template ${manifest.brain.templateId}\n---\n${s.body}`;
+      : `---\nname: ${s.name}\ndescription: from template legacy\n---\n${s.body}`;
     await writeFile(join(agentDir, "skills", filename), body, "utf-8");
   }
 
