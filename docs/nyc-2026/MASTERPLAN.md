@@ -9,7 +9,7 @@
 > status change, update the row here** (and the linked doc). Consult master ⇄ plan
 > docs to catch drift. If a plan exists only in someone's head, it's a bug — write it.
 >
-> Last reconciled: 2026-06-13 · test health: **63 pass / 0 fail** (`bun test packages/shared apps/operator`).
+> Last reconciled: 2026-06-13 · test health: **137 pass / 0 fail** (`bun test packages/shared apps/operator`).
 
 ---
 
@@ -36,8 +36,8 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 |---|---|---|---|---|
 | 00 | [state-and-funding](00-state-and-funding.md) | 🟡 living | wallets, addresses, funding list, brain decision | mainnet funding still pending (deployer L1 ETH, agent mainnet USDC) |
 | 01 | [network-switch](01-network-switch.md) | ✅ done | `network.ts` one-switch `NETWORK`, CAIP, ERC-8004 addrs pinned, 13 tests | migrate remaining call sites incrementally |
-| 02 | [ens-erc8004](02-ens-erc8004.md) | 🔲 not started | registry addrs verified+pinned only | ENSIP-26 record writer, ERC-8004 register, resolve+verify, swap `query_agent` off env map, L2 reputation. **ENS bounty.** |
-| 03 | [walrus](03-walrus.md) | 🟡 partial | `walrus-client.ts` built + testnet roundtrip proven; **skill storage/retrieval reliability VALIDATED** (`validate-walrus-skills.ts`: 12/12 stored, 36/36 reads byte-identical, 12/12 idempotent; write ~6.4s async / read ~364ms) | wire `WalrusStorage`→`OgStorageClient`, receipt pinning, snapshot/restore (async, post-task), AES encryption, amnesia demo. **Walrus bounty.** |
+| 02 | [ens-erc8004](02-ens-erc8004.md) | 🟡 code done (funding-gated) | **funding-independent code landed** (commit `8215bb7`, +56 tests): ERC-7930 interop-address encoder (`packages/shared/src/erc7930.ts`, round-trip verified — the plan's hand-crafted example was suspect, this is the source of truth); ENS records writer (`setTextRecords`/`readTextRecord`, network-configurable, Sepolia-tested); `resolveAgent`/`verifyAgent` (ENSIP-25 fail-on-empty, both branches tested); `query_agent` now ENS-first w/ ENSIP-25 verify before paying, `BASE_SEPOLIA_AGENTS` kept as fallback only | **blocked on L1 ETH** (deployer `0x2908…9D10`): fire `setTextRecords({network:"mainnet",…})` per agent + ERC-8004 `register(agentURI)`/`setAgentWallet` once funded (entrypoints ready); then `NETWORK=mainnet`. L2 reputation still ahead. **ENS bounty.** |
+| 03 | [walrus](03-walrus.md) | 🟢 mostly done | client + skill reliability VALIDATED; **all 4 plan layers built & tested** (commit `1b6b483`, +18 tests, real testnet blobIds): `WalrusStorage implements OgStorageClient` behind `STORAGE_BACKEND=walrus\|shadow` switch; AES-256-GCM envelope (`crypto.ts`, wrong-key fails); snapshot/restore w/ Hermes hooks (tar→encrypt→Walrus→wipe→restore byte-identical incl. `memory.db`); receipt pinning (blobId in receipt index, `walrusTapeUrl()`) | web inference tape to read aggregator URL (`apps/web/*` — Kilian); set `AGENT_SNAPSHOT_KEY` in operator env + do the live amnesia-demo run; note testnet `epochs=90` broken on all 3 publishers → default `epochs=5` (`WALRUS_EPOCHS`). **Walrus bounty.** |
 | 04 | [dynamic](04-dynamic.md) | 🔲 not started | recipe + 3-act demo speced | dashboard creds (Kilian), `importPrivateKey` AUDIT wallet, policies + webhook. **Dynamic bounty.** |
 | 05 | [x402-v2](05-x402-v2.md) | ✅ done | all 3 legs real v2, verified live; homegrown deleted; smokes left | live mainnet Exa (needs ~$1 mainnet USDC) — optional |
 | 06 | [revenue-and-economics](06-revenue-and-economics.md) | 🟡 partial | x402 settle works | revenue split + P&L, mainnet rails deploy (IPO gated), LI.FI self-funding top-up, **cost-display UX** (below), GTM/sell-at-venue |
@@ -50,14 +50,14 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 
 | Plan | Status | Notes |
 |---|---|---|
-| **Demo-script agent** (first consumer agent) | 🟡 brainstorm | DECIDED: demo-script first; hybrid arch (deterministic repo-digest + `read_file` tool); brain = deepseek-v3 0G TEE (**tool-calling PROVEN** `smoke-0g-tool-calling.ts`; v4 = one-line swap, needs sub-account funding). Takes GitHub URL + optional "what bounties/vibe". Moat = our judging-criteria/marketing knowledge. **Next: finish brainstorm → spec doc → writing-plans.** Sibling agents: bounty-fit, submission-checker, integration-recipe. Customers = hackers in the room. |
-| **Drill-cypher agent** (2nd consumer agent) | 🟡 brainstorm | Fun/viral: writes a drill cypher roasting your "opps" → **ElevenLabs Music v2** (one API call: lyrics→full rap track, vocals on beat, commercially cleared — kills beat-sourcing/TTS-align) → store on **Walrus** (media bounty synergy). Brain edgy/profane latitude PROVEN (`smoke-0g-tone-test.ts`). Moat = drill lyric craft. Needs: ElevenLabs key (Tier-1 secret, [09](09-agent-secrets.md)); validate audio quality with ONE real gen before committing. |
+| **[Demo-script agent](10-demo-script-agent.md)** (first consumer agent) | 🔲 spec'd (was brainstorm) | **Spec doc written 2026-06-13** ([10](10-demo-script-agent.md)) — hybrid arch (deterministic repo-digest + `read_file` tool), brain deepseek-v3 0G TEE (tool-calling proven `smoke-0g-tool-calling.ts`; v4 = one-line swap, needs sub-account funding), GitHub URL + "bounties/vibe" input, moat = judging-criteria/marketing knowledge, 5 TDD build steps + acceptance criteria, $2.00/run vs ~$0.003 COGS. **Next: writing-plans → build.** Open Q: who authors the judging-knowledge system-prompt block + when. Siblings (future): bounty-fit, submission-checker, integration-recipe. |
+| **[Drill-cypher agent](11-drill-cypher-agent.md)** (2nd consumer agent) | 🔲 spec'd (gated) | **Spec doc written 2026-06-13** ([11](11-drill-cypher-agent.md)) — pipeline deepseek-v3 lyrics (tone latitude proven `smoke-0g-tone-test.ts`) → **ElevenLabs Music v2** (one API call) → **Walrus** (media bounty synergy), inline web audio player, $3.00/run. **Hard gate Step 0:** ONE real audio gen must prove the endpoint before any wiring. Needs ElevenLabs key (Tier-1, [09](09-agent-secrets.md)). Open Q: exact endpoint name + per-call cost (settle at de-risk gate by Sat 11 AM). |
 | **Agent-economics cost-display UX** | 📋 idea | Builder-platform feature: show deployer the per-call OG inference cost (real ledger numbers) so they price above COGS; "cost per X tokens" in launch UI. Backed by LI.FI top-up loop. Part of [06](06-revenue-and-economics.md). |
 | **Legacy-agent deprecation** | 🟡 partial | `deprecated:true` set on AUDIT/MEMER/ORCL in `agent-metadata.ts`; the (in-flight) web UI must read the flag to hide/badge them. |
 
 ## Bounty → plan → status (the prize map)
-- **ENS** $2.5k (continuity) → plan **02** → 🔲 (foundation only). Highest prize, our deepest fit.
-- **Walrus** $3k (continuity, 4 winners) → plan **03** → 🟡 (client proven). Best odds.
+- **ENS** $2.5k (continuity) → plan **02** → 🟡 (resolver/verifier/writer + ERC-7930 all coded & tested; live writes gated on L1 ETH). Highest prize, our deepest fit.
+- **Walrus** $3k (continuity, 4 winners) → plan **03** → 🟢 (all 4 layers built & tested; only web tape + live amnesia demo remain). Best odds.
 - **Dynamic** $2k+$2k → plan **04** → 🔲 (needs dashboard). Smallest scope; sponsor rapport.
 
 ## Cross-cutting "do not forget" deliverables
@@ -65,15 +65,15 @@ sponsors stay load-bearing; TDD on everything; one-switch network config.
 - [ ] Revenue split + P&L on agent profile — [06](06-revenue-and-economics.md)
 - [ ] Self-funding loop (LI.FI USDC→OG top-up) — [06](06-revenue-and-economics.md)
 - [ ] Sell to hackers at venue (GTM) + revenue watcher — [06](06-revenue-and-economics.md)
-- [ ] ENS records + ERC-8004 registration + reputation-weighted query_agent — [02](02-ens-erc8004.md)
-- [ ] Walrus storage impl + amnesia demo — [03](03-walrus.md)
+- [ ] ENS records + ERC-8004 registration + reputation-weighted query_agent — [02](02-ens-erc8004.md) · *resolver/verifier/writer + ERC-7930 coded & tested; live writes gated on L1 ETH*
+- [ ] Walrus storage impl + amnesia demo — [03](03-walrus.md) · *storage impl + AES + snapshot/restore + receipt pinning ✅; live amnesia-demo run + web tape remain*
 - [ ] Dynamic wallet glow-up + guardrail demo — [04](04-dynamic.md)
 - [ ] Demo-script agent shipped + sold — new spec
 - [ ] Architecture diagram (serves all 3 bounty submissions) — [07](07-build-order-checklist.md)
 - [ ] ENS booth Sunday AM (mandatory, in person)
 
 ## Workstreams (who/what is moving in parallel)
-- **Protocol layer** (Claude): network switch ✅, x402 v2 ✅, walrus client 🟡 — building bounty integrations next.
+- **Protocol layer** (Claude): network switch ✅, x402 v2 ✅, Walrus 🟢 (all layers built+tested), ENS/8004 🟡 (code done, funding-gated) — bounty integrations landed this session via parallel worktree agents.
 - **Hermes harness**: real-Hermes fidelity ✅ (Claude, this session) — see [08](08-hermes-fidelity.md). Only live smoke + Walrus-amnesia wiring remain.
 - **Web redesign** (Kilian): platform split / daylight 🟡 — [13](../13-platform-split-landing-docs.md). Claude stays out of `apps/web/*` to avoid collision unless asked.
 
