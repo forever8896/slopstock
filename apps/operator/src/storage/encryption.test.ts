@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { AesCipher } from "./encryption.ts";
+import { AesCipher, getSnapshotCipher } from "./encryption.ts";
 import { generateKey, exportKeyToBase64 } from "./crypto.ts";
 
 test("AesCipher round-trips bytes; id is ignored", async () => {
@@ -17,4 +17,15 @@ test("AesCipher decrypt with wrong key throws", async () => {
   const b = await AesCipher.fromBase64(await exportKeyToBase64(await generateKey()));
   const sealed = await a.encrypt(new TextEncoder().encode("x"), "3");
   await expect(b.decrypt(sealed, "3")).rejects.toThrow();
+});
+
+test("getSnapshotCipher returns aes when SNAPSHOT_ENCRYPTION unset", async () => {
+  const prevEnc = process.env["SNAPSHOT_ENCRYPTION"];
+  const prevKey = process.env["AGENT_SNAPSHOT_KEY"];
+  delete process.env["SNAPSHOT_ENCRYPTION"];
+  process.env["AGENT_SNAPSHOT_KEY"] = await exportKeyToBase64(await generateKey());
+  const cipher = await getSnapshotCipher();
+  expect(cipher.kind).toBe("aes");
+  if (prevEnc === undefined) delete process.env["SNAPSHOT_ENCRYPTION"]; else process.env["SNAPSHOT_ENCRYPTION"] = prevEnc;
+  if (prevKey === undefined) delete process.env["AGENT_SNAPSHOT_KEY"]; else process.env["AGENT_SNAPSHOT_KEY"] = prevKey;
 });

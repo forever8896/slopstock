@@ -10,6 +10,7 @@ import {
   deserializeEnvelope,
   importKeyFromBase64,
 } from "./crypto.ts";
+import { SealCipher } from "./seal.ts";
 
 export interface SnapshotCipher {
   /** Encrypt plaintext → serialized envelope bytes (stored on Walrus). `id` scopes the agent (Seal identity). */
@@ -34,4 +35,20 @@ export class AesCipher implements SnapshotCipher {
   async decrypt(bytes: Uint8Array, _id: string): Promise<Uint8Array> {
     return aesDecrypt(this.key, deserializeEnvelope(bytes));
   }
+}
+
+/**
+ * Build the SnapshotCipher selected by SNAPSHOT_ENCRYPTION.
+ *   aes  (default) — AesCipher from AGENT_SNAPSHOT_KEY (base64url)
+ *   seal           — SealCipher (threshold IBE over Mysten open key servers)
+ * If AGENT_SNAPSHOT_KEY is unset for aes, a per-process key is generated
+ * (snapshots only survive restarts if the env var is set).
+ */
+export async function getSnapshotCipher(): Promise<SnapshotCipher> {
+  const mode = process.env["SNAPSHOT_ENCRYPTION"] ?? "aes";
+  if (mode === "seal") return SealCipher.fromEnv();
+  const b64 = process.env["AGENT_SNAPSHOT_KEY"];
+  if (b64) return AesCipher.fromBase64(b64);
+  const { generateKey, exportKeyToBase64 } = await import("./crypto.ts");
+  return AesCipher.fromBase64(await exportKeyToBase64(await generateKey()));
 }
