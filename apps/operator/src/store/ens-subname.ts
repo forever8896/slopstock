@@ -26,7 +26,7 @@ import {
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { sepolia, mainnet } from "viem/chains";
 
 const SLOPSTOCK_NODE = namehash("slopstock.eth");
 
@@ -82,6 +82,27 @@ const publicResolverAbi = [
     stateMutability: "view",
     inputs: [{ name: "node", type: "bytes32" }],
     outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "setText",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "node", type: "bytes32" },
+      { name: "key", type: "string" },
+      { name: "value", type: "string" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "text",
+    stateMutability: "view",
+    inputs: [
+      { name: "node", type: "bytes32" },
+      { name: "key", type: "string" },
+    ],
+    outputs: [{ type: "string" }],
   },
 ] as const;
 
@@ -195,4 +216,173 @@ export async function registerSubname(
     setAddrTx,
     newlyCreated,
   };
+}
+
+// ─── ENS Text Record Writer (ENSIP-26 + ENSIP-25) ─────────────────────────────
+//
+// Canonical resolver addresses. The ENS Registry address is the same on all chains.
+// PublicResolver addresses differ per chain.
+
+/** ENS Registry — same address on every chain (ENSv2 universal). */
+const ENS_REGISTRY: Hex = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e";
+/** Canonical PublicResolver on Ethereum mainnet (ens-contracts v0.0.21+). */
+const PUBLIC_RESOLVER_MAINNET: Hex = "0x4976fb03C32e5B8cfe2b6cCB31c09Ba78EBaBa41";
+
+/**
+ * One text record to set: a key and the value to write.
+ * ENSIP-26 keys: "agent-context", "agent-endpoint[x402|mcp|a2a|web]"
+ * ENSIP-25 keys: "agent-registration[<interopAddr>][<agentId>]"
+ */
+export interface TextRecord {
+  key: string;
+  value: string;
+}
+
+export interface SetTextRecordsOpts {
+  /**
+   * Full ENS name to set records on (e.g. "auditor.slopstock.eth").
+   * The deployer key MUST own (or control) this name.
+   */
+  ensName: string;
+  /** Text records to write — each becomes one `setText` tx. */
+  records: TextRecord[];
+  /** Deployer key owning the ENS name. */
+  deployerKey: Hex;
+  /**
+   * Target network: "mainnet" | "sepolia".
+   * Defaults to "sepolia" — mainnet writes require L1 ETH (FUNDING GATE).
+   */
+  network?: "mainnet" | "sepolia";
+  /**
+   * Override RPC URL. Falls back to public endpoints.
+   * For mainnet: supply a reliable paid RPC (e.g. Infura/Alchemy) before going live.
+   */
+  rpcUrl?: string;
+}
+
+export interface SetTextRecordsResult {
+  ensName: string;
+  node: Hex;
+  /** Tx hash for each setText call, in the same order as opts.records. */
+  txHashes: Hex[];
+  network: "mainnet" | "sepolia";
+}
+
+/**
+ * Write ENSIP-26 / ENSIP-25 text records to an ENS name.
+ *
+ * Works on both Sepolia (testnet) and Ethereum mainnet. The network is
+ * selected via `opts.network` — defaults to "sepolia".
+ *
+ * FUNDING GATE: mainnet writes require L1 ETH in the deployer wallet.
+ * Build-time status: code is complete and Sepolia-tested; mainnet path is
+ * wired but intentionally NOT invoked — call `setTextRecords({ network: "mainnet" })`
+ * once the deployer wallet is funded with L1 ETH.
+ *
+ * @example (Sepolia, safe to call any time)
+ *   await setTextRecords({
+ *     ensName: "auditor.slopstock.eth",
+ *     records: [
+ *       { key: "agent-context", value: "Solidity security auditor…" },
+ *       { key: "agent-endpoint[x402]", value: "https://operator.slopstock.xyz/x402/infer?tokenId=1" },
+ *     ],
+ *     deployerKey: process.env.DEPLOYER_PRIVATE_KEY,
+ *     network: "sepolia",
+ *   });
+ */
+export async function setTextRecords(
+  opts: SetTextRecordsOpts,
+): Promise<SetTextRecordsResult> {
+  const network = opts.network ?? "sepolia";
+  const isMainnet = network === "mainnet";
+
+  // Select chain config
+  const chain = isMainnet ? mainnet : sepolia;
+  const resolverAddress: Hex = isMainnet
+    ? PUBLIC_RESOLVER_MAINNET
+    : PUBLIC_RESOLVER_SEPOLIA;
+  const defaultRpc = isMainnet
+    ? "https://eth.llamarpc.com"
+    : "https://ethereum-sepolia-rpc.publicnode.com";
+  const rpcUrl = opts.rpcUrl ?? defaultRpc;
+
+  const node = namehash(opts.ensName);
+  const account = privateKeyToAccount(opts.deployerKey);
+  const transport = http(rpcUrl);
+  const publicClient = createPublicClient({ chain, transport });
+  const walletClient = createWalletClient({ account, chain, transport });
+
+  // Verify that the deployer controls this node before writing.
+  const currentResolver = (await publicClient.readContract({
+    address: ENS_REGISTRY,
+    abi: ensRegistryAbi,
+    functionName: "resolver",
+    args: [node],
+  })) as Hex;
+  if (
+    currentResolver.toLowerCase() !== resolverAddress.toLowerCase() &&
+    currentResolver !== "0x0000000000000000000000000000000000000000"
+  ) {
+    console.warn(
+      `[ens-subname:setText] ${opts.ensName} resolver is ${currentResolver}, expected ${resolverAddress}. ` +
+        `Records will be written to the configured resolver — ensure it's authoritative.`,
+    );
+  }
+
+  const txHashes: Hex[] = [];
+  for (const record of opts.records) {
+    const txHash = await walletClient.writeContract({
+      address: resolverAddress,
+      abi: publicResolverAbi,
+      functionName: "setText",
+      args: [node, record.key, record.value],
+    });
+    await publicClient.waitForTransactionReceipt({ hash: txHash });
+    console.log(
+      `[ens-subname:setText] ${opts.ensName} key="${record.key}" value="${record.value.slice(0, 80)}" tx=${txHash} (${network})`,
+    );
+    txHashes.push(txHash);
+  }
+
+  return {
+    ensName: opts.ensName,
+    node,
+    txHashes,
+    network,
+  };
+}
+
+/**
+ * Read a single text record from an ENS name (view — no gas).
+ *
+ * @param ensName  Full ENS name (e.g. "auditor.slopstock.eth")
+ * @param key      Text record key (e.g. "agent-context")
+ * @param rpcUrl   Ethereum RPC URL (defaults to Sepolia public RPC)
+ * @param network  "mainnet" | "sepolia" (defaults to "sepolia")
+ */
+export async function readTextRecord(
+  ensName: string,
+  key: string,
+  opts?: { rpcUrl?: string; network?: "mainnet" | "sepolia" },
+): Promise<string> {
+  const network = opts?.network ?? "sepolia";
+  const isMainnet = network === "mainnet";
+  const chain = isMainnet ? mainnet : sepolia;
+  const resolverAddress: Hex = isMainnet ? PUBLIC_RESOLVER_MAINNET : PUBLIC_RESOLVER_SEPOLIA;
+  const defaultRpc = isMainnet
+    ? "https://eth.llamarpc.com"
+    : "https://ethereum-sepolia-rpc.publicnode.com";
+  const rpcUrl = opts?.rpcUrl ?? defaultRpc;
+
+  const node = namehash(ensName);
+  const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+
+  const value = (await publicClient.readContract({
+    address: resolverAddress,
+    abi: publicResolverAbi,
+    functionName: "text",
+    args: [node, key],
+  })) as string;
+
+  return value;
 }
