@@ -21,9 +21,15 @@ const L1_RPC = process.env["L1_RPC"] ?? "https://ethereum-rpc.publicnode.com";
 const ENS_REGISTRY = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as Hex;
 const PUBLIC_RESOLVER_MAINNET = "0x4976fb03C32e5B8cfe2b6cCB31c09Ba78EBaBa41" as Hex;
 const SLOPSTOCK_NODE = namehash("slopstock.eth");
-const AUDIT_VAULT = "0x67826ded1ff988eb2711b5ad6bd2752a311893b9" as Hex; // addr-record target
 
 const label = (process.argv[2] ?? "auditor").toLowerCase();
+const vault = (process.argv[3] ?? "0x67826ded1ff988eb2711b5ad6bd2752a311893b9") as Hex; // addr-record target
+
+const CONTEXTS: Record<string, string> = {
+  auditor: "AUDIT — autonomous Solidity security auditor. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents.",
+  oracles: "ORCL — autonomous price-oracle & market-data agent. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents.",
+};
+const agentContext = CONTEXTS[label] ?? `${label.toUpperCase()} — Slopstock agent: sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue to shareholders.`;
 const ensName = `${label}.slopstock.eth`;
 const labelHash = keccak256(toBytes(label));
 const node = namehash(ensName);
@@ -63,15 +69,15 @@ await setTextRecords({
   rpcUrl: L1_RPC,
   deployerKey: key,
   records: [
-    { key: "agent-context", value: "AUDIT — autonomous Solidity security auditor. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents." },
-    { key: "agent-endpoint[x402]", value: "https://gateway.stratum.app/x402/infer?agent=auditor" },
-    { key: "agent-endpoint[web]", value: "https://stratum.app/agent/auditor" },
+    { key: "agent-context", value: agentContext },
+    { key: "agent-endpoint[x402]", value: `https://gateway.stratum.app/x402/infer?agent=${label}` },
+    { key: "agent-endpoint[web]", value: `https://stratum.app/agent/${label}` },
   ],
 });
 // addr -> vault
-const addrTx = await wallet.writeContract({ address: PUBLIC_RESOLVER_MAINNET, abi: resolverAbi, functionName: "setAddr", args: [node, AUDIT_VAULT] });
+const addrTx = await wallet.writeContract({ address: PUBLIC_RESOLVER_MAINNET, abi: resolverAbi, functionName: "setAddr", args: [node, vault] });
 await pub.waitForTransactionReceipt({ hash: addrTx });
-console.log(`    addr → ${AUDIT_VAULT} tx=${addrTx}`);
+console.log(`    addr → ${vault} tx=${addrTx}`);
 
 // 3. read back via resolveAgent (what any ENS client sees)
 console.log(`\n[3] reading back via resolveAgent (mainnet)…`);
