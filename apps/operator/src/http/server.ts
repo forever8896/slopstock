@@ -46,10 +46,7 @@ import {
 } from "../storage/og-storage-impl.ts";
 import {
   TEMPLATE_LIST,
-  computeManifestHash,
   getNetwork,
-  validateManifest,
-  type AgentManifest,
 } from "@stratum/shared";
 import {
   buildAgentPaymentRequirements,
@@ -241,10 +238,21 @@ export function startHttpServer(deps: HttpDeps) {
   });
 }
 
-async function handleRegisterAgent(req: Request, deps: HttpDeps): Promise<Response> {
-  type RegisterBody = Partial<DynamicAgent> & {
-    bundleManifestCid?: string;
-    manifest?: AgentManifest;
+export async function handleRegisterAgent(req: Request, deps: Pick<HttpDeps, "config">): Promise<Response> {
+  type RegisterBody = {
+    tokenId?: unknown;
+    ticker?: unknown;
+    description?: unknown;
+    systemPrompt?: unknown;
+    perCallSmallest?: unknown;
+    /** Alternate to perCallSmallest: USD amount (e.g. "0.50") × 1e6 → perCallSmallest. */
+    perCallUsd?: unknown;
+    perCallHuman?: unknown;
+    creator?: unknown;
+    txHash?: unknown;
+    /** Optional MCP-style tool definitions passed through to the agent record. */
+    tools?: unknown;
+    name?: unknown;
   };
   let body: RegisterBody;
   try {
@@ -253,80 +261,42 @@ async function handleRegisterAgent(req: Request, deps: HttpDeps): Promise<Respon
     return json({ error: "invalid json body" }, { status: 400 });
   }
 
-  const required: Array<keyof DynamicAgent> = [
-    "tokenId",
-    "ticker",
-    "description",
-    "systemPrompt",
-    "model",
-    "perCallSmallest",
-    "creator",
-    "txHash",
-  ];
+  const required = ["tokenId", "ticker", "description", "systemPrompt", "creator", "txHash"] as const;
   for (const k of required) {
     if (!body[k]) return json({ error: `missing field: ${k}` }, { status: 400 });
   }
 
-  // Manifest mode (new): caller pinned a manifest before mint and committed
-  // its hash on chain. Verify the binding before accepting registration.
-  let templateId: string | undefined;
-  let runtimeTier: "openai-compat" | "tools-lite" | "hermes" | undefined;
-  let bundleManifestCid: string | undefined;
-  if (body.manifest) {
-    const validationErr = validateManifest(body.manifest);
-    if (validationErr) {
-      return json({ error: `invalid manifest: ${validationErr}` }, { status: 400 });
-    }
-    const expected = computeManifestHash(body.manifest);
-    if (body.bundleManifestCid) {
-      const got = body.bundleManifestCid.replace(/^0x/, "").toLowerCase();
-      const exp = expected.replace(/^0x/, "").toLowerCase();
-      if (got !== exp) {
-        return json(
-          {
-            error: "bundleManifestCid does not match keccak(manifest)",
-            expected: exp,
-            got,
-          },
-          { status: 400 },
-        );
-      }
-    }
-    bundleManifestCid = expected;
-    templateId = body.manifest.brain.templateId;
-    runtimeTier = body.manifest.brain.runtimeTier;
-
-    // Pin to operator shadow so the runtime can fetch by CID later. Idempotent.
-    const ogs = getOperatorOgStorage({ dataDir: deps.config.AGENTS_DATA_DIR });
-    await ogs.pinJson(body.manifest);
+  // Accept either perCallSmallest or perCallUsd (USD × 1e6).
+  let perCallSmallest: string;
+  if (body.perCallSmallest) {
+    perCallSmallest = String(body.perCallSmallest);
+  } else if (body.perCallUsd) {
+    perCallSmallest = String(Math.round(Number(body.perCallUsd) * 1e6));
+  } else {
+    return json({ error: "missing field: perCallSmallest (or perCallUsd)" }, { status: 400 });
   }
 
-  const perCallSmallest = body.perCallSmallest!;
   const perCallHuman =
-    body.perCallHuman ??
-    `$${(Number(perCallSmallest) / 1e6).toFixed(2)}`;
+    body.perCallHuman != null
+      ? String(body.perCallHuman)
+      : `$${(Number(perCallSmallest) / 1e6).toFixed(2)}`;
 
   const record: DynamicAgent = {
     tokenId: String(body.tokenId),
     ticker: String(body.ticker).toUpperCase(),
     description: String(body.description),
     systemPrompt: String(body.systemPrompt),
-    model: String(body.model),
+    // model is not required in the slim contract; default empty — the runtime
+    // selects the provider's TeeML model at call time via the 0g-compute backend.
+    model: "",
     perCallSmallest,
     perCallHuman,
-    runtime: runtimeTier === "hermes"
-      ? "hermes"
-      : body.runtime === "hermes"
-        ? "hermes"
-        : "openai-compat",
-    backend: body.backend === "0g-compute" ? "0g-compute" : "openai-compat",
+    runtime: "hermes",
+    backend: "0g-compute",
     creator: String(body.creator),
     txHash: String(body.txHash),
     createdAt: Math.floor(Date.now() / 1000),
-    ...(bundleManifestCid ? { bundleManifestCid } : {}),
-    ...(templateId ? { templateId } : {}),
-    ...(runtimeTier ? { runtimeTier } : {}),
-    ...(body.manifest ? { manifestShadow: body.manifest } : {}),
+    ...(body.tools !== undefined ? { tools: body.tools } : {}),
   };
 
   await registerDynamicAgent(record);
@@ -335,7 +305,7 @@ async function handleRegisterAgent(req: Request, deps: HttpDeps): Promise<Respon
   // with whatever the user does next on the /launch page. By the time they
   // see the "go live" step, ShareToken/RevenueVault/IPOSale are already
   // deploying — they just poll for completion. Idempotent + safe to retry.
-  startFinanceDeployAsync(record.tokenId, deps);
+  startFinanceDeployAsync(record.tokenId, deps as HttpDeps);
 
   return json({ ok: true, agent: record, financeStatus: "deploying" });
 }

@@ -58,6 +58,8 @@ export interface DynamicAgent {
   /** Defensive copy of the full manifest. Used when 0G Storage pull fails;
    *  also lets the operator survive cold-cache restarts without re-fetching. */
   manifestShadow?: AgentManifest;
+  /** Optional MCP-style tool definitions surfaced to the Hermes runtime. */
+  tools?: unknown;
 }
 
 import { setDynamicSnapshot } from "../runtime/dynamic-cache.ts";
