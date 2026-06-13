@@ -67,12 +67,18 @@ The factual half of the moat is **not** hand-typed — it's pulled live from
 | `GET /api/prizes?event=&sponsor=` | the **actual bounty text + qualifications** to angle callouts against |
 | `GET /api/projects?event=&keyword=&prize=&include=&limit=` | finalist/winner precedents to ground "what wins" advice |
 
-**It is itself an x402 API**: 10 free requests/minute, then `HTTP 402 → $0.05 USDC on
-Base mainnet per request`. We pay it with our **own x402 v2 outbound leg**
-([05](05-x402-v2.md)) — so the agent *dogfoods the payment triangle against a real,
-external third-party counterparty at the venue*. That is the headline agentic-commerce
-beat, not a side effect. (Free tier covers a single demo run; budget ~$0.20 of Base USDC
-for a session of repeated demos.)
+**It is itself an x402 API**: 10 free requests/minute, then *(per its docs)* `HTTP 402 →
+$0.05 USDC on Base mainnet per request`. In principle we'd pay it with our own x402 v2
+outbound leg ([05](05-x402-v2.md)) for a "pay a real third-party at the venue" beat.
+
+> ⚠️ **Verified 2026-06-13 — their paid path is currently broken.** Past the free tier the
+> API returns `HTTP 500 / MIDDLEWARE_INVOCATION_FAILED` (Vercel), **not** a 402 challenge,
+> so there is nothing for our x402 client to satisfy. **Do not depend on paying
+> ethglobal-skills for the payment-triangle headline** — that story stays with **Exa**
+> (proven outbound counterparty, [05](05-x402-v2.md)). Treat ethglobal-skills as a
+> **free-tier data source**: cache hard, stay ≤10 req/min, soft-fail to the frame on any
+> non-200. If they fix the middleware before judging, the "pay them live" beat is a bonus
+> (also needs Base-mainnet USDC — we currently hold only Base-Sepolia TestnetUSDC).
 
 The split is intentional:
 
@@ -266,9 +272,9 @@ or the Slopstock repo itself, run the agent, pay 2 USDC, get a script back in un
       complete, structured script within 60 s (wall clock).
 - [ ] Script contains at least one sponsor-specific callout that names a real NYC 2026 bounty
       **fetched live from ethglobal-skills** (not from the static frame) — verifiable in logs.
-- [ ] The run makes at least one **x402 payment to ethglobal-skills on Base** when past the
-      free tier, with a settlement visible alongside our own inbound payment — the
-      external-counterparty payment-triangle beat, demonstrable on one screen.
+- [ ] Payment-triangle beat demonstrable on one screen via **Exa** (proven outbound x402
+      counterparty) alongside our own inbound payment. *(Paying ethglobal-skills is a bonus
+      only if they fix their 500 paywall AND we have Base-mainnet USDC — not required.)*
 - [ ] Receipt blobId is in the footer and resolves on the Walrus testnet aggregator.
 - [ ] Payment path: caller pays 2.00 USDC via x402; Slopstock operator wallet receives it;
       ledger entry visible in the web P&L panel ([06](06-revenue-and-economics.md)).
