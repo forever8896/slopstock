@@ -183,7 +183,10 @@ export class HermesAgentRuntime implements AgentRuntime {
             const cipher = await getSnapshotCipher();
             await restoreAgentDir(dir, blobId, cipher, opts.tokenId.toString());
             const receiptsFile = join(dir, "receipts.ndjson");
-            if (existsSync(receiptsFile)) importAgentReceipts(await readFile(receiptsFile, "utf-8"));
+            if (existsSync(receiptsFile)) {
+              const n = importAgentReceipts(await readFile(receiptsFile, "utf-8"));
+              console.log(`[hermes] re-ingested ${n} receipt(s) for tokenId=${opts.tokenId}`);
+            }
             console.log(`[hermes] restore complete for tokenId=${opts.tokenId}`);
           }
         } catch (e) {
@@ -322,15 +325,19 @@ export class HermesAgentRuntime implements AgentRuntime {
     // Walrus snapshot: asynchronously tar+encrypt+upload after each state-changing
     // task. Non-blocking so it doesn't slow down the response to the subscriber.
     if (stateChanged) {
-      // Fold this agent's receipts into the state dir BEFORE taring so the
-      // snapshot captures them (receipts.db becomes a rebuildable cache).
-      try {
-        await writeFile(join(state.dir, "receipts.ndjson"), exportAgentReceipts(req.tokenId));
-      } catch (e) {
-        console.warn(`[hermes] receipts export failed tokenId=${req.tokenId}: ${(e as Error).message}`);
-      }
+      // Fire-and-forget: receipts export + tar + encrypt + upload + ENS pointer.
+      // The entire chain runs off the hot path so the subscriber response is not delayed.
       getSnapshotCipher()
-        .then((cipher) => snapshotAgentDir(state.dir, cipher, req.tokenId.toString()))
+        .then(async (cipher) => {
+          // Fold this agent's receipts into the state dir BEFORE taring so the
+          // snapshot captures them (receipts.db becomes a rebuildable cache).
+          try {
+            await writeFile(join(state.dir, "receipts.ndjson"), exportAgentReceipts(req.tokenId));
+          } catch (e) {
+            console.warn(`[hermes] receipts export failed tokenId=${req.tokenId}: ${(e as Error).message}`);
+          }
+          return snapshotAgentDir(state.dir, cipher, req.tokenId.toString());
+        })
         .then(async (blobId) => {
           state.lock.walrusSnapshotBlobId = blobId;
           await writeFile(join(state.dir, "bundle.lock.json"), JSON.stringify(state.lock, null, 2));
@@ -398,7 +405,7 @@ export class HermesAgentRuntime implements AgentRuntime {
     if (!this.config.L1_RPC || !this.config.DEPLOYER_PRIVATE_KEY) return; // not configured
     const key = tokenId.toString();
     if (_lastPublishedHash.get(key) === bundleHashAfter) return; // not a significant change
-    _pendingPointer = { ensName, blobId };
+    _pendingPointers.set(key, { ensName, blobId });
     try {
       await setSnapshotPointer({
         ensName,
@@ -407,7 +414,7 @@ export class HermesAgentRuntime implements AgentRuntime {
         rpcUrl: this.config.L1_RPC,
       });
       _lastPublishedHash.set(key, bundleHashAfter);
-      _pendingPointer = null;
+      _pendingPointers.delete(key);
       console.log(`[hermes] ENS agent-snapshot ${ensName} → ${blobId.slice(0, 16)}…`);
     } catch (e) {
       console.warn(`[hermes] ENS pointer write failed ${ensName}: ${(e as Error).message}`);
@@ -418,15 +425,29 @@ export class HermesAgentRuntime implements AgentRuntime {
 /** Seed agent tokenId → ENS subname, derived from BASE_SEPOLIA_AGENTS so it
  *  stays in sync with the canonical address book (1=auditor, 2=memer, 3=oracles). */
 const SEED_ENS_BY_TOKEN_ID = new Map<string, string>(
-  Object.values(BASE_SEPOLIA_AGENTS).map((a) => [a.tokenId.toString(), a.ensName]),
+  Object.values(BASE_SEPOLIA_AGENTS).filter((a) => !!a.ensName).map((a) => [a.tokenId.toString(), a.ensName]),
 );
 
 /** tokenId → last ENS-published bundleHash (debounce: only republish on change). */
 const _lastPublishedHash = new Map<string, string>();
-/** Last pointer we attempted but haven't confirmed; flushed on shutdown (Task D4). */
-let _pendingPointer: { ensName: string; blobId: string } | null = null;
-export function _getPendingPointer() {
-  return _pendingPointer;
+/** tokenId → unconfirmed ENS snapshot pointer (flushed on graceful shutdown via flushPendingPointers). */
+const _pendingPointers = new Map<string, { ensName: string; blobId: string }>();
+
+/** Flush any unconfirmed ENS snapshot pointers (called on graceful shutdown). Reads L1 creds from env. */
+export async function flushPendingPointers(): Promise<void> {
+  if (_pendingPointers.size === 0) return;
+  const rpcUrl = process.env["L1_RPC"];
+  const key = process.env["DEPLOYER_PRIVATE_KEY"];
+  if (!rpcUrl || !key) return;
+  for (const [tokenId, p] of [..._pendingPointers]) {
+    try {
+      await setSnapshotPointer({ ensName: p.ensName, blobId: p.blobId, deployerKey: key as `0x${string}`, rpcUrl });
+      _pendingPointers.delete(tokenId);
+      console.log(`[hermes] flushed ENS pointer ${p.ensName} → ${p.blobId.slice(0, 16)}…`);
+    } catch (e) {
+      console.warn(`[hermes] pointer flush failed ${p.ensName}: ${(e as Error).message}`);
+    }
+  }
 }
 
 /** Encode the LLM backend's attestation into the receipt's teeQuote slot. */
