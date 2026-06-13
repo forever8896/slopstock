@@ -3,7 +3,12 @@ import { PaymentRequiredV2Schema, PaymentRequirementsV2Schema } from "@x402/core
 import { safeBase64Encode } from "@x402/core/utils";
 import { resolveNetwork } from "@stratum/shared";
 
-import { build402, buildAgentPaymentRequirements, decodePaymentHeader } from "./x402-v2";
+import {
+  build402,
+  buildAgentPaymentRequirements,
+  decodePaymentHeader,
+  requirePayment,
+} from "./x402-v2";
 
 const VAULT = "0x1c1fa59c0b6e631a47c7ec4717af3a0b7bfdb382" as const;
 
@@ -95,5 +100,47 @@ describe("decodePaymentHeader", () => {
     const decoded = decodePaymentHeader(header);
     expect(decoded).not.toBeNull();
     expect(decoded?.x402Version).toBe(2);
+  });
+});
+
+describe("requirePayment (inbound gate)", () => {
+  const net = resolveNetwork({ NETWORK: "mainnet" });
+  const resource = "https://op.slopstock.eth/x402/infer?tokenId=3";
+  const requirements = buildAgentPaymentRequirements(net, {
+    priceSmallest: "100000", payTo: VAULT, resource,
+  });
+  const validHeader = safeBase64Encode(
+    JSON.stringify({
+      x402Version: 2,
+      accepted: requirements,
+      payload: {
+        signature: "0xdeadbeef",
+        authorization: {
+          from: "0x1111111111111111111111111111111111111111",
+          to: VAULT, value: "100000", validAfter: "0", validBefore: "99999999999",
+          nonce: "0x" + "00".repeat(32),
+        },
+      },
+    }),
+  );
+  const accept = { verify: async () => ({ isValid: true, payer: "0x1111111111111111111111111111111111111111" }) };
+  const reject = { verify: async () => ({ isValid: false, invalidReason: "insufficient_funds" }) };
+
+  test("no payment header → 402 (not ok)", async () => {
+    const gate = await requirePayment({ paymentHeader: null, resource, requirements, facilitator: accept });
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.response.status).toBe(402);
+  });
+
+  test("valid header but facilitator rejects → 402", async () => {
+    const gate = await requirePayment({ paymentHeader: validHeader, resource, requirements, facilitator: reject });
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.response.status).toBe(402);
+  });
+
+  test("valid header + facilitator verifies → ok with payer", async () => {
+    const gate = await requirePayment({ paymentHeader: validHeader, resource, requirements, facilitator: accept });
+    expect(gate.ok).toBe(true);
+    if (gate.ok) expect(gate.payer).toBe("0x1111111111111111111111111111111111111111");
   });
 });

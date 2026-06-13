@@ -12,8 +12,15 @@
 
 import type { NetworkConfig } from "@stratum/shared";
 import { x402Version } from "@x402/core";
+import { HTTPFacilitatorClient } from "@x402/core/server";
 import { PaymentPayloadV2Schema } from "@x402/core/schemas";
-import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
+import type {
+  FacilitatorClient,
+  PaymentPayload,
+  PaymentRequired,
+  PaymentRequirements,
+  VerifyResponse,
+} from "@x402/core/types";
 import { safeBase64Decode } from "@x402/core/utils";
 
 export interface AgentPaymentOpts {
@@ -70,4 +77,45 @@ export function decodePaymentHeader(headerValue: string | null): PaymentPayload 
   } catch {
     return null;
   }
+}
+
+/**
+ * Facilitator client for the selected network. Testnet uses the keyless public
+ * facilitator; mainnet points at the CDP facilitator (CDP auth headers wired in
+ * the funded-integration step via FacilitatorConfig.createAuthHeaders).
+ */
+export function createFacilitator(net: NetworkConfig): FacilitatorClient {
+  return new HTTPFacilitatorClient({ url: net.x402.facilitatorUrl });
+}
+
+/** Result of the inbound payment gate: pay-or-402. */
+export type PaymentGate =
+  | { ok: false; response: Response }
+  | { ok: true; payload: PaymentPayload; requirements: PaymentRequirements; payer?: string };
+
+/**
+ * Inbound gate: decode the client's payment, verify it with the facilitator,
+ * and either admit the request (caller does the work, then settles) or hand
+ * back a fresh 402. Verify happens BEFORE the work; settlement is the caller's
+ * job after the work succeeds (so we never settle for failed work).
+ */
+export async function requirePayment(args: {
+  paymentHeader: string | null;
+  resource: string;
+  requirements: PaymentRequirements;
+  facilitator: Pick<FacilitatorClient, "verify">;
+}): Promise<PaymentGate> {
+  const { paymentHeader, resource, requirements, facilitator } = args;
+  const payload = decodePaymentHeader(paymentHeader);
+  if (!payload) return { ok: false, response: build402(resource, [requirements]) };
+
+  let verdict: VerifyResponse;
+  try {
+    verdict = await facilitator.verify(payload, requirements);
+  } catch {
+    return { ok: false, response: build402(resource, [requirements]) };
+  }
+  if (!verdict.isValid) return { ok: false, response: build402(resource, [requirements]) };
+
+  return { ok: true, payload, requirements, payer: verdict.payer };
 }
