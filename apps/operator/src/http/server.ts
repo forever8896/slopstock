@@ -58,6 +58,7 @@ import {
   settlePayment,
   settleResponseHeader,
 } from "./x402-v2.ts";
+import { handleDemoScript } from "../agents/demo-script/http-handler.ts";
 
 export interface HttpDeps {
   config: OperatorConfig;
@@ -229,6 +230,10 @@ export function startHttpServer(deps: HttpDeps) {
       const deleteAgentMatch = url.pathname.match(/^\/agents\/(\d+)$/);
       if (deleteAgentMatch && req.method === "DELETE") {
         return withCors(await handleDeleteAgent(deleteAgentMatch[1]!, req));
+      }
+
+      if (url.pathname === "/run/demo-script" && req.method === "POST") {
+        return handleDemoScript(req, { net: x402Net, facilitator: x402Facilitator });
       }
 
       return withCors(new Response("not found", { status: 404 }));
