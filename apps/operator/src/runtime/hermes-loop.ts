@@ -18,8 +18,6 @@
  * (progressive disclosure). After a hard task it creates/improves a skill.
  */
 
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { AgentStep } from "@stratum/shared";
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
