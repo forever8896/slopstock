@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PaymentRequiredV2Schema, PaymentRequirementsV2Schema } from "@x402/core/schemas";
-import { safeBase64Encode } from "@x402/core/utils";
+import { encodePaymentSignatureHeader } from "@x402/core/http";
 import { resolveNetwork } from "@stratum/shared";
 
 import {
@@ -38,7 +38,7 @@ describe("buildAgentPaymentRequirements (x402 v2)", () => {
       priceSmallest: "1", payTo: VAULT, resource: "r",
     });
     expect(test.network).toBe("eip155:84532");
-    expect(test.asset.toLowerCase()).toBe("0xd44e0c3a9fa12e5c00c1714b51f4d8607962e603");
+    expect(test.asset.toLowerCase()).toBe("0x036cbd53842c5426634e7929541ec2318f3dcf7e");
   });
 
   test("amount is the price in smallest units; payTo is the vault", () => {
@@ -66,6 +66,11 @@ describe("build402", () => {
     expect(body.x402Version).toBe(2);
     expect(body.resource.url).toBe(resource);
     expect(body.accepts[0].amount).toBe("100000");
+  });
+
+  test("sets the PAYMENT-REQUIRED header the v2 client reads (not just the body)", () => {
+    const res = build402(resource, [reqs]);
+    expect(res.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
   });
 });
 
@@ -97,7 +102,7 @@ describe("decodePaymentHeader", () => {
   });
 
   test("decodes a valid base64 X-PAYMENT into the v2 payload", () => {
-    const header = safeBase64Encode(JSON.stringify(validPayload));
+    const header = encodePaymentSignatureHeader(validPayload as never);
     const decoded = decodePaymentHeader(header);
     expect(decoded).not.toBeNull();
     expect(decoded?.x402Version).toBe(2);
@@ -110,20 +115,18 @@ describe("requirePayment (inbound gate)", () => {
   const requirements = buildAgentPaymentRequirements(net, {
     priceSmallest: "100000", payTo: VAULT, resource,
   });
-  const validHeader = safeBase64Encode(
-    JSON.stringify({
-      x402Version: 2,
-      accepted: requirements,
-      payload: {
-        signature: "0xdeadbeef",
-        authorization: {
-          from: "0x1111111111111111111111111111111111111111",
-          to: VAULT, value: "100000", validAfter: "0", validBefore: "99999999999",
-          nonce: "0x" + "00".repeat(32),
-        },
+  const validHeader = encodePaymentSignatureHeader({
+    x402Version: 2,
+    accepted: requirements,
+    payload: {
+      signature: "0xdeadbeef",
+      authorization: {
+        from: "0x1111111111111111111111111111111111111111",
+        to: VAULT, value: "100000", validAfter: "0", validBefore: "99999999999",
+        nonce: "0x" + "00".repeat(32),
       },
-    }),
-  );
+    },
+  } as never);
   const accept = { verify: async () => ({ isValid: true, payer: "0x1111111111111111111111111111111111111111" }) };
   const reject = { verify: async () => ({ isValid: false, invalidReason: "insufficient_funds" }) };
 

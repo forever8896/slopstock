@@ -14,7 +14,9 @@ export type NetworkName = "testnet" | "mainnet";
 
 export interface NetworkConfig {
   name: NetworkName;
-  base: { chainId: number; rpcUrl: string; usdc: Hex };
+  /** `usdcEip712` is the USDC EIP-712 domain ({name, version}) the x402 client
+   *  needs to sign the EIP-3009 authorization — must match the token on-chain. */
+  base: { chainId: number; rpcUrl: string; usdc: Hex; usdcEip712: { name: string; version: string } };
   zg: { chainId: number; rpcUrl: string; computeRpcUrl: string };
   ens: { chainId: number; rpcUrl: string; registry: Hex; rootName: string };
   erc8004: { identityRegistry: Hex; reputationRegistry: Hex };
@@ -32,7 +34,11 @@ const TESTNET: NetworkConfig = {
   base: {
     chainId: 84532,
     rpcUrl: "https://sepolia.base.org",
-    usdc: "0xd44e0c3a9fa12e5c00c1714b51f4d8607962e603", // our permissionless TestnetUSDC
+    // Circle's Base Sepolia USDC — implements EIP-3009 (transferWithAuthorization),
+    // which x402 v2 settlement requires. (Our permissionless TestnetUSDC mock
+    // 0xd44e…962e603 is a plain ERC20 and can't be paid via v2.)
+    usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    usdcEip712: { name: "USDC", version: "2" }, // verified on-chain (name()/version())
   },
   zg: {
     chainId: 16602,
@@ -63,6 +69,7 @@ const MAINNET: NetworkConfig = {
     chainId: 8453,
     rpcUrl: "https://mainnet.base.org",
     usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // canonical Circle USDC
+    usdcEip712: { name: "USD Coin", version: "2" }, // TODO verify on-chain before mainnet use
   },
   zg: {
     chainId: 16661,

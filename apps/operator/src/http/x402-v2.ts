@@ -12,8 +12,12 @@
 
 import type { NetworkConfig } from "@stratum/shared";
 import { x402Version } from "@x402/core";
+import {
+  decodePaymentSignatureHeader,
+  encodePaymentRequiredHeader,
+  encodePaymentResponseHeader,
+} from "@x402/core/http";
 import { HTTPFacilitatorClient } from "@x402/core/server";
-import { PaymentPayloadV2Schema } from "@x402/core/schemas";
 import type {
   FacilitatorClient,
   PaymentPayload,
@@ -22,7 +26,6 @@ import type {
   SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
-import { safeBase64Decode } from "@x402/core/utils";
 
 export interface AgentPaymentOpts {
   /** USDC amount in smallest units (6dp). */
@@ -48,6 +51,8 @@ export function buildAgentPaymentRequirements(
     maxTimeoutSeconds: o.maxTimeoutSeconds ?? 120,
     resource: o.resource,
     description: o.description ?? "",
+    // EIP-712 domain for the USDC EIP-3009 authorization the client signs.
+    extra: { name: net.base.usdcEip712.name, version: net.base.usdcEip712.version },
   } as PaymentRequirements;
 }
 
@@ -61,8 +66,18 @@ export function build402(resource: string, accepts: PaymentRequirements[]): Resp
   const body = { x402Version, resource: { url: resource }, accepts } as PaymentRequired;
   return new Response(JSON.stringify(body), {
     status: 402,
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      // The v2 client reads requirements from this header (the JSON body branch
+      // is v1-only). encodePaymentRequiredHeader base64-encodes the PaymentRequired.
+      "PAYMENT-REQUIRED": encodePaymentRequiredHeader(body),
+    },
   });
+}
+
+/** Encode a settlement result into the PAYMENT-RESPONSE header the v2 client reads. */
+export function settleResponseHeader(settle: SettleResponse): string {
+  return encodePaymentResponseHeader(settle);
 }
 
 /**
@@ -73,12 +88,15 @@ export function build402(resource: string, accepts: PaymentRequirements[]): Resp
 export function decodePaymentHeader(headerValue: string | null): PaymentPayload | null {
   if (!headerValue) return null;
   try {
-    const parsed = PaymentPayloadV2Schema.safeParse(JSON.parse(safeBase64Decode(headerValue)));
-    return parsed.success ? (parsed.data as PaymentPayload) : null;
+    // v2 clients send the PAYMENT-SIGNATURE header; this decodes its base64 envelope.
+    return decodePaymentSignatureHeader(headerValue) as PaymentPayload;
   } catch {
     return null;
   }
 }
+
+/** Header name a v2 client uses to carry the signed payment. */
+export const PAYMENT_HEADER = "PAYMENT-SIGNATURE";
 
 /**
  * Facilitator client for the selected network. Testnet uses the keyless public
