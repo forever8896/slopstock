@@ -224,7 +224,7 @@ function makeClient(opts?: AgentResolverOpts): {
   const chain = isMainnet ? mainnet : sepolia;
   const resolver = isMainnet ? PUBLIC_RESOLVER_MAINNET : PUBLIC_RESOLVER_SEPOLIA;
   const defaultRpc = isMainnet
-    ? "https://eth.llamarpc.com"
+    ? "https://ethereum-rpc.publicnode.com"
     : "https://ethereum-sepolia-rpc.publicnode.com";
   const rpcUrl = opts?.rpcUrl ?? defaultRpc;
 

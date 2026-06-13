@@ -302,7 +302,7 @@ export async function setTextRecords(
     ? PUBLIC_RESOLVER_MAINNET
     : PUBLIC_RESOLVER_SEPOLIA;
   const defaultRpc = isMainnet
-    ? "https://eth.llamarpc.com"
+    ? "https://ethereum-rpc.publicnode.com"
     : "https://ethereum-sepolia-rpc.publicnode.com";
   const rpcUrl = opts.rpcUrl ?? defaultRpc;
 
@@ -370,7 +370,7 @@ export async function readTextRecord(
   const chain = isMainnet ? mainnet : sepolia;
   const resolverAddress: Hex = isMainnet ? PUBLIC_RESOLVER_MAINNET : PUBLIC_RESOLVER_SEPOLIA;
   const defaultRpc = isMainnet
-    ? "https://eth.llamarpc.com"
+    ? "https://ethereum-rpc.publicnode.com"
     : "https://ethereum-sepolia-rpc.publicnode.com";
   const rpcUrl = opts?.rpcUrl ?? defaultRpc;
 

@@ -25,11 +25,16 @@ const SLOPSTOCK_NODE = namehash("slopstock.eth");
 const label = (process.argv[2] ?? "auditor").toLowerCase();
 const vault = (process.argv[3] ?? "0x67826ded1ff988eb2711b5ad6bd2752a311893b9") as Hex; // addr-record target
 
+// agentId is embedded in agent-context ("agentId: N") so an ENS client (incl. our
+// own query_agent) can extract it and run ENSIP-25 verification against ERC-8004.
+const AGENT_IDS: Record<string, string> = { auditor: "55228", oracles: "55229" };
 const CONTEXTS: Record<string, string> = {
   auditor: "AUDIT — autonomous Solidity security auditor. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents.",
   oracles: "ORCL — autonomous price-oracle & market-data agent. Sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue split to shareholders. Part of Slopstock — a stock exchange for AI agents.",
 };
-const agentContext = CONTEXTS[label] ?? `${label.toUpperCase()} — Slopstock agent: sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue to shareholders.`;
+const baseContext = CONTEXTS[label] ?? `${label.toUpperCase()} — Slopstock agent: sealed TEE inference on 0G mainnet (deepseek-v4), x402 paywall, ERC-7857 iNFT with on-chain revenue to shareholders.`;
+const agentId = AGENT_IDS[label] ?? process.env["AGENT_ID"];
+const agentContext = agentId ? `${baseContext} ERC-8004 agentId: ${agentId}.` : baseContext;
 const ensName = `${label}.slopstock.eth`;
 const labelHash = keccak256(toBytes(label));
 const node = namehash(ensName);

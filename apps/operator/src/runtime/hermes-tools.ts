@@ -307,9 +307,12 @@ const queryAgent: ToolDef = {
 
     if (target.toLowerCase().endsWith(".eth")) {
       try {
-        const netConfig = ctx.config as unknown as { NETWORK?: string; SEPOLIA_RPC_URL?: string };
-        const ensNetwork = netConfig.NETWORK === "mainnet" ? "mainnet" as const : "sepolia" as const;
-        const ensRpcUrl = netConfig.SEPOLIA_RPC_URL;
+        // slopstock.eth + its agent subnames live on Ethereum MAINNET ENS, so we
+        // resolve + ENSIP-25-verify there regardless of which network the x402
+        // payment rails run on. Override with ENS_NETWORK=sepolia for testnet demos.
+        const netConfig = ctx.config as unknown as { ENS_NETWORK?: string; ETH_RPC_URL?: string };
+        const ensNetwork = netConfig.ENS_NETWORK === "sepolia" ? "sepolia" as const : "mainnet" as const;
+        const ensRpcUrl = netConfig.ETH_RPC_URL;
 
         // Resolve ENSIP-26 records
         const resolved = await resolveAgent(target.toLowerCase(), {
@@ -379,28 +382,27 @@ const queryAgent: ToolDef = {
     if (ensEndpointX402) {
       const wallet = agentWalletFor(ctx.config.OPERATOR_PRIVATE_KEY as Hex, ctx.callerTokenId);
       const payFetch = createAgentPayFetch(wallet);
-      let body: { output?: string; receipt?: unknown; callId?: string; status?: string; message?: string; settlementTx?: string } = {};
+      let body: { output?: string; receipt?: unknown; callId?: string; status?: string; message?: string; settlementTx?: string } | null = null;
       try {
         const res = await payFetch(ensEndpointX402, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ input: inputText, subscriber: wallet.address }),
         });
-        if (!res.ok) {
-          const t = await res.text().catch(() => "");
-          return {
-            text: `${ensResolutionNote}peer ${res.status}: ${t.slice(0, 200)}`,
-            resultSummary: `peer ${res.status}`,
-          };
+        if (res.ok) {
+          body = await res.json();
+        } else {
+          // Published endpoint reachable but unhappy — keep discovery+verify, fall
+          // back to the known route below rather than failing the whole call.
+          console.warn(`[query_agent] ENS endpoint ${ensEndpointX402} returned ${res.status} — falling back to known route`);
         }
-        body = await res.json();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return {
-          text: `${ensResolutionNote}agent payment/call failed: ${msg.slice(0, 250)}`,
-          resultSummary: `pay failed (ENS path)`,
-        };
+        console.warn(`[query_agent] ENS endpoint unreachable (${msg.slice(0, 80)}) — falling back to known route`);
       }
+      // Only return on a successful ENS-routed payment; otherwise fall through to
+      // the static-map route (the peer was already ENS-discovered + ENSIP-25-verified).
+      if (body) {
       const output = body.output ?? "(empty)";
       return {
         text:
@@ -408,6 +410,7 @@ const queryAgent: ToolDef = {
         resultSummary: `${ensResolutionNote}paid ${target}`,
         meta: { settlementTx: body.settlementTx, peerCallId: body.callId, peerOutput: output },
       };
+      }
     }
 
     // ── Static map fallback ────────────────────────────────────────────────────
