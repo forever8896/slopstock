@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { loadConfig } from "./config";
+import { loadConfig, envSchema } from "./config";
 
 const REQUIRED: Record<string, string> = {
   OPERATOR_PRIVATE_KEY: "0x" + "a".repeat(64),
@@ -110,5 +110,12 @@ describe("loadConfig defaults", () => {
     delete process.env["SEAL_KEY_SERVERS"];
     const cfg = loadConfig();
     expect(cfg.SEAL_KEY_SERVERS).toBe("");
+  });
+
+  it("SEAL_THRESHOLD rejects a fractional value (schema-level, no process.exit)", () => {
+    // Use envSchema.safeParse directly so we don't hit process.exit(1)
+    const input = { ...REQUIRED, SEAL_THRESHOLD: "2.5" };
+    const result = envSchema.safeParse(input);
+    expect(result.success).toBe(false);
   });
 });

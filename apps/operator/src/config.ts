@@ -140,7 +140,7 @@ const envSchema = z.object({
   SEAL_PACKAGE_ID: z.string().default(""),
   SEAL_ALLOWLIST_ID: z.string().default(""),
   // Minimum threshold of Seal key-server approvals required to decrypt.
-  SEAL_THRESHOLD: z.coerce.number().default(2),
+  SEAL_THRESHOLD: z.coerce.number().int().positive().default(2),
   // Base64 or bech32 Sui keypair used to sign Seal allowlist access requests.
   SUI_SEAL_KEYPAIR: z.string().default(""),
   // Optional comma-separated Seal key-server object IDs (overrides baked-in
@@ -149,6 +149,7 @@ const envSchema = z.object({
 });
 
 export type OperatorConfig = z.infer<typeof envSchema>;
+export { envSchema };
 
 export function loadConfig(): OperatorConfig {
   const parsed = envSchema.safeParse(process.env);
