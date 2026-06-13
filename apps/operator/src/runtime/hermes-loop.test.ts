@@ -66,3 +66,14 @@ test("frozenMemory loaded from disk surfaces in the system prompt", async () => 
   });
   expect(out).toContain("remembered: ORCL likes TWAP");
 });
+
+import { appendMemoryLine } from "./memory-files.ts";
+
+test("reloading frozen memory after a note reflects the new fact (per-session refresh)", async () => {
+  const dir = await mkdtemp(joinPath(tmpdir(), "hermes-refresh-"));
+  const before = await loadFrozenMemory(dir);
+  expect(before.memory).toBe("");
+  await appendMemoryLine(dir, "oracle: prefer TWAP");
+  const after = await loadFrozenMemory(dir); // what runTask now does each call
+  expect(after.memory).toContain("oracle: prefer TWAP");
+});

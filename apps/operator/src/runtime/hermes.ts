@@ -246,6 +246,12 @@ export class HermesAgentRuntime implements AgentRuntime {
     const state = this.stateByToken.get(req.tokenId.toString());
     if (!state) throw new RuntimeError(`runtime not loaded for tokenId ${req.tokenId}`);
 
+    // Each audit is a fresh Hermes "session": reload skills + frozen memory from
+    // disk so newly created/improved skills and notes from prior audits in this
+    // same process are reflected in this audit's (frozen-for-the-turn) prompt.
+    state.skills = await loadSkills(state.dir);
+    state.frozenMemory = await loadFrozenMemory(state.dir);
+
     if (!this.loop) {
       this.loop = await import("./hermes-loop.ts");
     }
