@@ -117,6 +117,35 @@ const envSchema = z.object({
 
   // Receipt persistence.
   RECEIPTS_DB_PATH: z.string().default("./data/receipts.db"),
+
+  // Snapshot encryption backend for stateless-operator mode.
+  //   "aes"  — AES-256-GCM encrypted blob stored on Walrus (key held by operator).
+  //   "seal" — Mysten Seal threshold-encryption (no single party holds the key).
+  SNAPSHOT_ENCRYPTION: z.enum(["aes", "seal"]).default("aes"),
+
+  // When true, the operator writes an ENS TXT record pointing to the latest
+  // Walrus snapshot after each hermes turn (mainnet ENS, ENSIP-25 verify).
+  // Uses z.string().optional().transform so that the STRING "false" correctly
+  // yields boolean false (z.coerce.boolean("false") would give true — a footgun).
+  ENS_SNAPSHOT_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "1" || v === "true"),
+
+  // Ethereum mainnet RPC for ENS pointer reads/writes.
+  L1_RPC: z.string().default(""),
+
+  // Mysten Seal network and package to use.
+  SEAL_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
+  SEAL_PACKAGE_ID: z.string().default(""),
+  SEAL_ALLOWLIST_ID: z.string().default(""),
+  // Minimum threshold of Seal key-server approvals required to decrypt.
+  SEAL_THRESHOLD: z.coerce.number().default(2),
+  // Base64 or bech32 Sui keypair used to sign Seal allowlist access requests.
+  SUI_SEAL_KEYPAIR: z.string().default(""),
+  // Optional comma-separated Seal key-server object IDs (overrides baked-in
+  // testnet defaults). Required because the SDK removed getAllowlistedKeyServers.
+  SEAL_KEY_SERVERS: z.string().default(""),
 });
 
 export type OperatorConfig = z.infer<typeof envSchema>;
