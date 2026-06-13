@@ -67,3 +67,40 @@ describe("ensureSkillFrontmatter", () => {
     expect(out).toContain("version: 1");
   });
 });
+
+import { mkdtemp, mkdir, readFile as readFileFs } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readSkillBody, listSkillStems, upsertSkill } from "./skills.ts";
+
+async function tmpAgentDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "hermes-skills-"));
+  await mkdir(join(dir, "skills"), { recursive: true });
+  return dir;
+}
+
+describe("upsertSkill + readSkillBody + listSkillStems", () => {
+  test("create then update bumps version and replaces body", async () => {
+    const dir = await tmpAgentDir();
+    const first = await upsertSkill(dir, "Oracle Check", "---\nname: Oracle Check\nversion: 1\n---\nv1 body");
+    expect(first.action).toBe("create");
+    expect(first.stem).toBe("oracle-check");
+    expect(first.version).toBe(1);
+
+    const second = await upsertSkill(dir, "Oracle Check", "---\nname: Oracle Check\nversion: 1\n---\nv2 body");
+    expect(second.action).toBe("update");
+    expect(second.version).toBe(2);
+
+    const body = await readSkillBody(dir, "Oracle Check");
+    expect(body).toContain("v2 body");
+    expect(body).not.toContain("v1 body");
+    expect(body).toContain("version: 2");
+
+    expect(await listSkillStems(dir)).toEqual(["oracle-check"]);
+  });
+
+  test("readSkillBody returns null for missing skill", async () => {
+    const dir = await tmpAgentDir();
+    expect(await readSkillBody(dir, "nope")).toBeNull();
+  });
+});
