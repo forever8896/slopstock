@@ -40,6 +40,7 @@ const MYSTEN_OPEN_KEY_SERVERS: Record<SealNetwork, string[]> = {
 
 export class SealCipher implements SnapshotCipher {
   readonly kind = "seal" as const;
+  private sessionKey: SessionKey | null = null;
   private constructor(
     private readonly client: SealClient,
     private readonly suiClient: SuiJsonRpcClient,
@@ -53,8 +54,14 @@ export class SealCipher implements SnapshotCipher {
     const packageId = req("SEAL_PACKAGE_ID");
     const allowlistId = req("SEAL_ALLOWLIST_ID");
     const secret = req("SUI_SEAL_KEYPAIR");
-    const network = (process.env["SEAL_NETWORK"] ?? "testnet") as SealNetwork;
+    const network = (process.env["SEAL_NETWORK"] ?? "testnet");
+    if (network !== "testnet" && network !== "mainnet") {
+      throw new Error(`SealCipher: SEAL_NETWORK must be "testnet" or "mainnet" (got "${network}")`);
+    }
     const threshold = Number(process.env["SEAL_THRESHOLD"] ?? "2");
+    if (!Number.isInteger(threshold) || threshold < 1) {
+      throw new Error(`SealCipher: SEAL_THRESHOLD must be a positive integer (got "${process.env["SEAL_THRESHOLD"]}")`);
+    }
 
     const serverIds = (process.env["SEAL_KEY_SERVERS"] ?? "")
       .split(",")
@@ -71,9 +78,14 @@ export class SealCipher implements SnapshotCipher {
     const serverConfigs = objectIds.map((objectId) => ({ objectId, weight: 1 }));
     const client = new SealClient({ suiClient, serverConfigs, verifyKeyServers: false });
 
-    const keypair = secret.startsWith("suiprivkey")
-      ? Ed25519Keypair.fromSecretKey(secret)
-      : Ed25519Keypair.fromSecretKey(fromHex(secret.replace(/^0x/, "")));
+    let keypair: Ed25519Keypair;
+    try {
+      keypair = secret.startsWith("suiprivkey")
+        ? Ed25519Keypair.fromSecretKey(secret)
+        : Ed25519Keypair.fromSecretKey(fromHex(secret.replace(/^0x/, "")));
+    } catch (e) {
+      throw new Error(`SealCipher: SUI_SEAL_KEYPAIR is not a valid key (expected suiprivkey... or 0x-prefixed hex): ${(e as Error).message}`);
+    }
 
     return new SealCipher(client, suiClient, keypair, packageId, allowlistId, threshold);
   }
@@ -98,13 +110,21 @@ export class SealCipher implements SnapshotCipher {
   }
 
   async decrypt(bytes: Uint8Array, id: string): Promise<Uint8Array> {
-    const sessionKey = await SessionKey.create({
-      address: this.keypair.toSuiAddress(),
-      packageId: this.packageId,
-      ttlMin: 10,
-      signer: this.keypair,
-      suiClient: this.suiClient,
-    });
+    // NOTE (deployment runbook): SessionKey.create pins packageId at call time. The Seal SDK
+    // validates that packageId matches package version "1" on-chain. If the on-chain package is
+    // upgraded (UPGRADE tx), the new package objectId will differ from version "1" and the key
+    // server will reject with InvalidPackageError. Always re-deploy allowlist + update
+    // SEAL_PACKAGE_ID to the version-1 objectId of the new publication; do NOT reuse old ID.
+    if (!this.sessionKey || this.sessionKey.isExpired()) {
+      this.sessionKey = await SessionKey.create({
+        address: this.keypair.toSuiAddress(),
+        packageId: this.packageId,
+        ttlMin: 10,
+        signer: this.keypair,
+        suiClient: this.suiClient,
+      });
+    }
+    const sessionKey = this.sessionKey;
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.packageId}::allowlist::seal_approve`,
