@@ -1,7 +1,9 @@
 # Slopstock @ ETHGlobal NYC 2026 — Continuity Track
 
 > **Master index.** Every plan for the weekend lives in this folder. If it's not
-> written here, it doesn't exist. Read this file first; it links everything else.
+> written here, it doesn't exist. This file is the orientation/thesis;
+> **for live implementation status of every plan, see [MASTERPLAN.md](MASTERPLAN.md)** —
+> the defensive status dashboard. Update it whenever a plan's status changes.
 
 Event: ETHGlobal New York 2026, in-person. We enter the **first-ever Continuity
 Track** — extending the Open Agents finalist (April 2026), not a from-scratch build.
