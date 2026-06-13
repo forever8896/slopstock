@@ -33,6 +33,11 @@ describe("resolveNetwork", () => {
     );
   });
 
+  test("x402 network is CAIP-2 (x402 v2 format), not the legacy named form", () => {
+    expect(resolveNetwork({ NETWORK: "mainnet" }).x402.network).toBe("eip155:8453");
+    expect(resolveNetwork({}).x402.network).toBe("eip155:84532");
+  });
+
   test("env RPC overrides win over the baked-in default", () => {
     const net = resolveNetwork({ NETWORK: "mainnet", BASE_RPC_URL: "https://my.rpc" });
     expect(net.base.rpcUrl).toBe("https://my.rpc");

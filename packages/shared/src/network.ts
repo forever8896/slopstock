@@ -18,7 +18,7 @@ export interface NetworkConfig {
   zg: { chainId: number; rpcUrl: string; computeRpcUrl: string };
   ens: { chainId: number; rpcUrl: string; registry: Hex; rootName: string };
   erc8004: { identityRegistry: Hex; reputationRegistry: Hex };
-  /** `network` is the x402 `accepts[].network` id ("base" | "base-sepolia"). */
+  /** `network` is the x402 v2 CAIP-2 id (e.g. "eip155:8453" | "eip155:84532"). */
   x402: { facilitatorUrl: string; network: string };
   /** Per-agent on-chain bundle, keyed by ticker. Empty until deployed. */
   agents: Record<string, AgentAddresses>;
@@ -52,7 +52,7 @@ const TESTNET: NetworkConfig = {
   },
   x402: {
     facilitatorUrl: "https://x402.org/facilitator", // keyless testnet facilitator
-    network: "base-sepolia",
+    network: "eip155:84532", // CAIP-2 (x402 v2)
   },
   agents: BASE_SEPOLIA_AGENTS,
 };
@@ -81,7 +81,7 @@ const MAINNET: NetworkConfig = {
   },
   x402: {
     facilitatorUrl: "https://x402.coinbase.com", // CDP facilitator (creds in .env)
-    network: "base",
+    network: "eip155:8453", // CAIP-2 (x402 v2)
   },
   agents: {}, // populated at mainnet deploy; assertNetworkConfigured guards against forgetting
 };

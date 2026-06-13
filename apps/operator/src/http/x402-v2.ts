@@ -1,0 +1,41 @@
+/**
+ * x402 v2 — real protocol via the official `@x402/*` packages (replaces the
+ * homegrown challenge+txHash flow in x402.ts).
+ *
+ * v2 wire format (from @x402/core/schemas PaymentRequirementsV2Schema):
+ *   { scheme:"exact", network:CAIP-2, amount, asset, payTo, maxTimeoutSeconds, ... }
+ * x402Version = 2. Networks are CAIP-2 ("eip155:8453"), NOT the legacy named form.
+ *
+ * Network + asset come from the NetworkConfig (one-switch testnet/mainnet) —
+ * the first call-site migrated onto getNetwork().
+ */
+
+import type { NetworkConfig } from "@stratum/shared";
+import type { PaymentRequirements } from "@x402/core/types";
+
+export interface AgentPaymentOpts {
+  /** USDC amount in smallest units (6dp). */
+  priceSmallest: string;
+  /** Recipient — the agent's RevenueVault. */
+  payTo: `0x${string}`;
+  /** The resource URL being paid for. */
+  resource: string;
+  description?: string;
+  maxTimeoutSeconds?: number;
+}
+
+export function buildAgentPaymentRequirements(
+  net: NetworkConfig,
+  o: AgentPaymentOpts,
+): PaymentRequirements {
+  return {
+    scheme: "exact",
+    network: net.x402.network, // CAIP-2, e.g. "eip155:8453"
+    amount: o.priceSmallest,
+    asset: net.base.usdc,
+    payTo: o.payTo,
+    maxTimeoutSeconds: o.maxTimeoutSeconds ?? 120,
+    resource: o.resource,
+    description: o.description ?? "",
+  } as PaymentRequirements;
+}
