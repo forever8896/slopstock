@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { buildSystemContent, sawErrorRecovery } from "./hermes-loop.ts";
 import type { AgentStep } from "@stratum/shared";
+import { loadFrozenMemory } from "./memory-files.ts";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 
 describe("buildSystemContent", () => {
   const tools = [{ name: "parse_ast", description: "scan" }, { name: "skill_view", description: "read a skill" }];
@@ -51,4 +55,14 @@ describe("sawErrorRecovery", () => {
   test("false when the only error is the last step", () => {
     expect(sawErrorRecovery([tstep("ok"), tstep("pay failed: 0xabc")])).toBe(false);
   });
+});
+
+test("frozenMemory loaded from disk surfaces in the system prompt", async () => {
+  const dir = await mkdtemp(joinPath(tmpdir(), "hermes-fm-"));
+  await writeFile(joinPath(dir, "MEMORY.md"), "- remembered: ORCL likes TWAP");
+  const fm = await loadFrozenMemory(dir);
+  const out = buildSystemContent({
+    systemPrompt: "ROLE", tools: [], skillIndex: "(no skills yet)", frozenMemory: fm,
+  });
+  expect(out).toContain("remembered: ORCL likes TWAP");
 });

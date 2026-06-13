@@ -40,6 +40,7 @@ import type { AgentStep } from "@stratum/shared";
 import type { Clients } from "../chain/clients.ts";
 import type { OperatorConfig } from "../config.ts";
 import { hashBundleDir, stateDeltaHash } from "./bundle.ts";
+import { loadFrozenMemory, type FrozenMemory } from "./memory-files.ts";
 import type { LLMBackend } from "./llm-backend.ts";
 import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput } from "./types.ts";
@@ -85,6 +86,7 @@ interface AgentState {
   systemPrompt: string;
   skills: SkillDoc[];
   lock: BundleLock;
+  frozenMemory: FrozenMemory; // Layer 1
   /** Tool whitelist (manifest-driven). Undefined = no whitelist (legacy
    *  static-trio behavior; full TOOL_REGISTRY is exposed). */
   tools?: string[];
@@ -210,6 +212,7 @@ export class HermesAgentRuntime implements AgentRuntime {
 
     // Skills
     const skills = await loadSkills(dir);
+    const frozenMemory = await loadFrozenMemory(dir);
 
     // Bundle lock
     const lockPath = join(dir, "bundle.lock.json");
@@ -230,6 +233,7 @@ export class HermesAgentRuntime implements AgentRuntime {
       systemPrompt,
       skills,
       lock,
+      frozenMemory,
       ...(this.manifestOverride ? { tools: this.manifestOverride.tools } : {}),
     });
   }
@@ -253,6 +257,7 @@ export class HermesAgentRuntime implements AgentRuntime {
         db: state.db,
         systemPrompt: state.systemPrompt,
         skills: state.skills,
+        frozenMemory: state.frozenMemory,
         ...(state.tools ? { tools: state.tools } : {}),
       },
       req,
