@@ -98,6 +98,18 @@ export interface ListReceiptsOpts {
   limit?: number;
 }
 
+/**
+ * TEST-ONLY: Close and discard the current DB connection so the next call to
+ * db() opens a fresh one. Set RECEIPTS_DB_PATH=:memory: before calling this
+ * to get an empty in-memory database.
+ */
+export function __resetReceiptsDbForTest(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
 export function listReceipts(opts: ListReceiptsOpts = {}): InferenceReceipt[] {
   const limit = Math.min(opts.limit ?? 50, 500);
   const conditions: string[] = [];
