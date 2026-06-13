@@ -45,7 +45,11 @@ import type { LLMBackend } from "./llm-backend.ts";
 import { measurementForToken } from "./measurement.ts";
 import { RuntimeError, type AgentRuntime, type AgentTaskInput, type AgentTaskOutput } from "./types.ts";
 import { snapshotAgentDir, restoreAgentDir } from "../storage/snapshot.ts";
-import { importKeyFromBase64, generateKey } from "../storage/crypto.ts";
+import { getSnapshotCipher } from "../storage/encryption.ts";
+import { exportAgentReceipts, importAgentReceipts } from "../store/receipt-export.ts";
+import { setSnapshotPointer, readSnapshotPointer } from "../store/snapshot-pointer.ts";
+import { getDynamicAgentSync } from "./dynamic-cache.ts";
+import { BASE_SEPOLIA_AGENTS } from "@stratum/shared";
 
 const SEED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../seed/agents");
 
@@ -164,28 +168,29 @@ export class HermesAgentRuntime implements AgentRuntime {
 
     // Walrus snapshot restore: if the agent dir is missing (e.g. after amnesia
     // wipe), try to restore from the latest Walrus snapshot before falling back
-    // to seed. Only applies when a snapshot blobId is recorded in the lock file
-    // *in the parent data dir* (which survives across data/agents/ wipes because
-    // it's stored in the lock alongside the agent state).
+    // to seed. The latest blobId is resolved from the agent's ENS snapshot
+    // pointer (mainnet), so a fully stateless operator can rehydrate from
+    // chain + Walrus alone. Any failure falls through to the seed copy below.
     if (!this.manifestOverride && !existsSync(dir)) {
-      // Check if there's a snapshot blobId in any existing bundle.lock.json
-      // that might have been preserved (or in a sibling .snapshot file).
-      const snapshotFile = `${dir}.snapshot`;
-      if (existsSync(snapshotFile)) {
+      const ensName = this.ensNameFor(opts.tokenId);
+      if (ensName && this.config.L1_RPC) {
         try {
-          const snapInfo = JSON.parse(await readFile(snapshotFile, "utf-8")) as {
-            walrusBlobId: string;
-          };
-          if (snapInfo.walrusBlobId) {
+          const blobId = await readSnapshotPointer({ ensName, rpcUrl: this.config.L1_RPC });
+          if (blobId) {
             console.log(
-              `[hermes] restoring tokenId=${opts.tokenId} from Walrus snapshot ${snapInfo.walrusBlobId.slice(0, 16)}…`,
+              `[hermes] restoring tokenId=${opts.tokenId} from ENS ${ensName} → walrus:${blobId.slice(0, 16)}…`,
             );
-            const snapKey = await getSnapshotKey();
-            await restoreAgentDir(dir, snapInfo.walrusBlobId, snapKey);
+            const cipher = await getSnapshotCipher();
+            await restoreAgentDir(dir, blobId, cipher, opts.tokenId.toString());
+            const receiptsFile = join(dir, "receipts.ndjson");
+            if (existsSync(receiptsFile)) {
+              const n = importAgentReceipts(await readFile(receiptsFile, "utf-8"));
+              console.log(`[hermes] re-ingested ${n} receipt(s) for tokenId=${opts.tokenId}`);
+            }
             console.log(`[hermes] restore complete for tokenId=${opts.tokenId}`);
           }
         } catch (e) {
-          console.warn(`[hermes] snapshot restore failed, falling back to seed: ${(e as Error).message}`);
+          console.warn(`[hermes] ENS/Walrus restore failed, falling back to seed: ${(e as Error).message}`);
         }
       }
     }
@@ -320,27 +325,26 @@ export class HermesAgentRuntime implements AgentRuntime {
     // Walrus snapshot: asynchronously tar+encrypt+upload after each state-changing
     // task. Non-blocking so it doesn't slow down the response to the subscriber.
     if (stateChanged) {
-      getSnapshotKey()
-        .then((snapKey) => snapshotAgentDir(state.dir, snapKey))
+      // Fire-and-forget: receipts export + tar + encrypt + upload + ENS pointer.
+      // The entire chain runs off the hot path so the subscriber response is not delayed.
+      getSnapshotCipher()
+        .then(async (cipher) => {
+          // Fold this agent's receipts into the state dir BEFORE taring so the
+          // snapshot captures them (receipts.db becomes a rebuildable cache).
+          try {
+            await writeFile(join(state.dir, "receipts.ndjson"), exportAgentReceipts(req.tokenId));
+          } catch (e) {
+            console.warn(`[hermes] receipts export failed tokenId=${req.tokenId}: ${(e as Error).message}`);
+          }
+          return snapshotAgentDir(state.dir, cipher, req.tokenId.toString());
+        })
         .then(async (blobId) => {
           state.lock.walrusSnapshotBlobId = blobId;
-          // Persist blobId in lock file (in-place update)
-          await writeFile(
-            join(state.dir, "bundle.lock.json"),
-            JSON.stringify(state.lock, null, 2),
-          );
-          // Also write a sibling .snapshot file so load() can find it after amnesia wipe
-          const snapshotFile = `${state.dir}.snapshot`;
-          await writeFile(snapshotFile, JSON.stringify({ walrusBlobId: blobId }));
-          console.log(
-            `[hermes] snapshot tokenId=${req.tokenId} → walrus:${blobId.slice(0, 16)}…`,
-          );
+          await writeFile(join(state.dir, "bundle.lock.json"), JSON.stringify(state.lock, null, 2));
+          console.log(`[hermes] snapshot tokenId=${req.tokenId} → walrus:${blobId.slice(0, 16)}…`);
+          await this.maybePublishPointer(req.tokenId, bundleHashAfter, blobId);
         })
-        .catch((e) => {
-          console.warn(
-            `[hermes] snapshot failed for tokenId=${req.tokenId}: ${(e as Error).message}`,
-          );
-        });
+        .catch((e) => console.warn(`[hermes] snapshot failed tokenId=${req.tokenId}: ${(e as Error).message}`));
     }
 
     const inputBytes = new TextEncoder().encode(req.input);
@@ -370,6 +374,80 @@ export class HermesAgentRuntime implements AgentRuntime {
   private dirFor(tokenId: bigint): string {
     return join(this.config.AGENTS_DATA_DIR, tokenId.toString());
   }
+
+  /**
+   * Resolve a tokenId → the agent's ENS subname (e.g. "auditor.slopstock.eth"),
+   * or null if unknown. A null result safely disables the ENS snapshot pointer
+   * for that agent (write path skips it; restore path falls back to seed).
+   *
+   * Source of truth: a dynamic-registry entry's `ensName` if present, else the
+   * seed agent map derived from BASE_SEPOLIA_AGENTS (@stratum/shared) — e.g.
+   * tokenId 1 → auditor.slopstock.eth, 3 → oracles.slopstock.eth.
+   */
+  private ensNameFor(tokenId: bigint): string | null {
+    const dyn = getDynamicAgentSync(tokenId);
+    if (dyn?.ensName) return dyn.ensName;
+    return SEED_ENS_BY_TOKEN_ID.get(tokenId.toString()) ?? null;
+  }
+
+  /**
+   * Publish the latest Walrus blobId into the agent's ENS snapshot pointer
+   * (mainnet tx). Heavily guarded so default/test runs never hit mainnet:
+   *   - skip unless the agent has a known ENS name
+   *   - skip unless ENS_SNAPSHOT_ENABLED (default off)
+   *   - skip unless both L1_RPC and DEPLOYER_PRIVATE_KEY are configured
+   *   - debounce: skip when bundleHash hasn't changed since the last publish
+   */
+  private async maybePublishPointer(tokenId: bigint, bundleHashAfter: string, blobId: string): Promise<void> {
+    const ensName = this.ensNameFor(tokenId);
+    if (!ensName) return;                                   // no known ENS name → skip
+    if (!this.config.ENS_SNAPSHOT_ENABLED) return;          // feature flag off (default)
+    if (!this.config.L1_RPC || !this.config.DEPLOYER_PRIVATE_KEY) return; // not configured
+    const key = tokenId.toString();
+    if (_lastPublishedHash.get(key) === bundleHashAfter) return; // not a significant change
+    _pendingPointers.set(key, { ensName, blobId });
+    try {
+      await setSnapshotPointer({
+        ensName,
+        blobId,
+        deployerKey: this.config.DEPLOYER_PRIVATE_KEY as `0x${string}`,
+        rpcUrl: this.config.L1_RPC,
+      });
+      _lastPublishedHash.set(key, bundleHashAfter);
+      _pendingPointers.delete(key);
+      console.log(`[hermes] ENS agent-snapshot ${ensName} → ${blobId.slice(0, 16)}…`);
+    } catch (e) {
+      console.warn(`[hermes] ENS pointer write failed ${ensName}: ${(e as Error).message}`);
+    }
+  }
+}
+
+/** Seed agent tokenId → ENS subname, derived from BASE_SEPOLIA_AGENTS so it
+ *  stays in sync with the canonical address book (1=auditor, 2=memer, 3=oracles). */
+const SEED_ENS_BY_TOKEN_ID = new Map<string, string>(
+  Object.values(BASE_SEPOLIA_AGENTS).filter((a) => !!a.ensName).map((a) => [a.tokenId.toString(), a.ensName]),
+);
+
+/** tokenId → last ENS-published bundleHash (debounce: only republish on change). */
+const _lastPublishedHash = new Map<string, string>();
+/** tokenId → unconfirmed ENS snapshot pointer (flushed on graceful shutdown via flushPendingPointers). */
+const _pendingPointers = new Map<string, { ensName: string; blobId: string }>();
+
+/** Flush any unconfirmed ENS snapshot pointers (called on graceful shutdown). Reads L1 creds from env. */
+export async function flushPendingPointers(): Promise<void> {
+  if (_pendingPointers.size === 0) return;
+  const rpcUrl = process.env["L1_RPC"];
+  const key = process.env["DEPLOYER_PRIVATE_KEY"];
+  if (!rpcUrl || !key) return;
+  for (const [tokenId, p] of [..._pendingPointers]) {
+    try {
+      await setSnapshotPointer({ ensName: p.ensName, blobId: p.blobId, deployerKey: key as `0x${string}`, rpcUrl });
+      _pendingPointers.delete(tokenId);
+      console.log(`[hermes] flushed ENS pointer ${p.ensName} → ${p.blobId.slice(0, 16)}…`);
+    } catch (e) {
+      console.warn(`[hermes] pointer flush failed ${p.ensName}: ${(e as Error).message}`);
+    }
+  }
 }
 
 /** Encode the LLM backend's attestation into the receipt's teeQuote slot. */
@@ -392,27 +470,6 @@ function encodeBackendAttestation(
   return Buffer.from(
     `stratum-testnet-no-tee-quote:runtime=hermes:tokenId=${tokenId}:bundle=${bundleHash}:backend=${att.backend}:ts=${Date.now()}`,
   ).toString("base64");
-}
-
-// ─── snapshot key ─────────────────────────────────────────────────────────────
-
-let _snapshotKey: CryptoKey | null = null;
-
-/**
- * Load (or generate) the AES-256-GCM key used for agent state snapshots.
- * Key is read from AGENT_SNAPSHOT_KEY env var (base64url, 32 bytes).
- * If unset a fresh key is generated per-process (snapshots only survive restarts
- * if the env var is set — acceptable for testnet/hackathon).
- */
-async function getSnapshotKey(): Promise<globalThis.CryptoKey> {
-  if (_snapshotKey) return _snapshotKey;
-  const b64 = process.env["AGENT_SNAPSHOT_KEY"];
-  if (b64) {
-    _snapshotKey = await importKeyFromBase64(b64);
-  } else {
-    _snapshotKey = await generateKey();
-  }
-  return _snapshotKey;
 }
 
 /** Read every Markdown file under <dir>/skills/, parse frontmatter. */

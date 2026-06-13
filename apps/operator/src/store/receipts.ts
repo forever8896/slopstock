@@ -98,6 +98,18 @@ export interface ListReceiptsOpts {
   limit?: number;
 }
 
+/**
+ * TEST-ONLY: Close and discard the current DB connection so the next call to
+ * db() opens a fresh one. Set RECEIPTS_DB_PATH=:memory: before calling this
+ * to get an empty in-memory database.
+ */
+export function __resetReceiptsDbForTest(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
 export function listReceipts(opts: ListReceiptsOpts = {}): InferenceReceipt[] {
   const limit = Math.min(opts.limit ?? 50, 500);
   const conditions: string[] = [];
@@ -114,5 +126,20 @@ export function listReceipts(opts: ListReceiptsOpts = {}): InferenceReceipt[] {
   const rows = db()
     .prepare(`SELECT receipt FROM receipts ${where} ORDER BY ts DESC LIMIT ?`)
     .all(...params, limit) as { receipt: string }[];
+  return rows.map((row) => JSON.parse(row.receipt) as InferenceReceipt);
+}
+
+/**
+ * All receipts for a single agent (tokenId), UNBOUNDED — used by snapshot
+ * export only, NOT the rate-limited HTTP tape. Ordered by ts ASC so the
+ * exported tape reproduces the original chronological sequence.
+ *
+ * Never call this from the HTTP /receipts endpoint — use listReceipts()
+ * (which is capped at 500) for that path.
+ */
+export function listAllReceiptsForToken(tokenId: bigint): InferenceReceipt[] {
+  const rows = db()
+    .prepare("SELECT receipt FROM receipts WHERE tokenId = ? ORDER BY ts ASC")
+    .all(tokenId.toString()) as { receipt: string }[];
   return rows.map((row) => JSON.parse(row.receipt) as InferenceReceipt);
 }

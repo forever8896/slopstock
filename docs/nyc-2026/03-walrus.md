@@ -1,5 +1,28 @@
 # 03 — Walrus (decentralized storage for agents)
 
+## ✅ UPDATE (2026-06-14): Seal + ENS-pointer + stateless operator — IMPLEMENTED
+
+Everything below this section reflects the original weekend plan. The following supersedes the stale notes on Seal (NO-GO) and local pointers.
+
+**What shipped on `feat/stateless-operator-walrus-seal-ens` (branch, unmerged as of 2026-06-14):**
+
+- **Seal is IN.** `@mysten/seal` threshold IBE is integrated as `SealCipher` — gasless encrypt/decrypt via Mysten open-mode testnet key servers. The old "Seal NO-GO" note is superseded; the mainnet-live SDK works, open-mode public key servers exist **on testnet** (mainnet has no Mysten open-mode servers yet → Seal path targets testnet for the hackathon). `SNAPSHOT_ENCRYPTION=seal` activates it; `SNAPSHOT_ENCRYPTION=aes` (default) is the offline/CI fallback path. One Sui Move `agent_seal::allowlist` policy package is authored (compile-pending: needs `sui move build` + `sui client publish`).
+- **Pointer is an ENS `agent-snapshot` text record (not a local file).** `setSnapshotPointer`/`readSnapshotPointer` write/read the mutable record on Ethereum mainnet. The operator keeps no volume-local state pointer → **the operator is stateless** (Railway volume is now an optional cache, not a hard dependency).
+- **Receipts folded into snapshots.** `exportAgentReceipts`/`importAgentReceipts` — `receipts.db` becomes a rebuildable cold-start cache rather than the source of truth.
+- **AES path unchanged as fallback.** `AesCipher` (AES-256-GCM, `AGENT_SNAPSHOT_KEY` env) is the default and the offline-CI path; `SealCipher` is opt-in.
+- **Amnesia demo PROVEN — Mode A (live Walrus testnet, AES):** full `data/agents/` wipe → byte-identical restore confirmed against live Walrus testnet. Script: `apps/operator/scripts/amnesia-demo.ts`.
+- **Design refs:** [spec](../superpowers/specs/2026-06-13-walrus-stateless-operator-design.md) · [plan](../superpowers/plans/2026-06-13-walrus-stateless-operator.md).
+
+**Remaining (user infra — NOT automated):**
+1. `sui move build` inside `packages/agent-seal/` and `sui client publish` → capture `SEAL_PACKAGE_ID`.
+2. Run `apps/operator/scripts/seal-publish-policy.ts` → capture `SEAL_ALLOWLIST_ID`.
+3. Set `SEAL_*` + `SUI_SEAL_KEYPAIR` + `ENS_SNAPSHOT_ENABLED=1` + `L1_RPC` in operator env.
+4. Run live Seal round-trip: `SEAL_LIVE_TEST=1 bun test`.
+5. Run amnesia Mode B (ENS pointer + Seal cipher → full cold-boot from ENS+Walrus).
+6. Detach the Railway volume (infra action — makes statelessness official).
+
+---
+
 > **Bounty:** Sui/Walrus "Best product integrating Walrus" — Continuity ($3k, up to 4
 > winners). Booth said **product-market-fit** is what they're judging. We fit their
 > "already on decentralized storage, real product adopting Walrus" profile exactly.

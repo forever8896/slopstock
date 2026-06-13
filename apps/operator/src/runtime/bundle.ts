@@ -28,6 +28,27 @@ import type { Hex } from "@stratum/shared";
 const NULL_BUNDLE_HASH: Hex = keccak256(stringToHex("stratum/empty-bundle"));
 
 /**
+ * Filenames excluded from the lineage hash. These travel inside the snapshot
+ * tar (so they ride along on restore) but are NOT part of the durable agent
+ * "brain", so hashing them would make the lineage hash unstable:
+ *
+ *  - `bundle.lock.json` is self-referential — it stores the bundleHash itself
+ *    (and a mutable walrusSnapshotBlobId / lastUpdated). Hashing it would be
+ *    circular and would change every snapshot.
+ *  - `receipts.ndjson` is a rebuildable cache of the receipt tape folded into
+ *    the dir for portable restore — it is derived audit output, not brain
+ *    state. Hashing it would make the lineage hash depend on the receipt tape.
+ *
+ * Excluding these (by relative path, forward-slash) makes the write-time hash
+ * and the cold-restore re-hash agree regardless of receipts/lock presence.
+ * The brain (memory.db, system.md, skills/*, patterns/*) stays hashed.
+ */
+const HASH_DENYLIST: ReadonlySet<string> = new Set([
+  "bundle.lock.json",
+  "receipts.ndjson",
+]);
+
+/**
  * Hash an on-disk agent bundle. Returns NULL_BUNDLE_HASH if the directory
  * doesn't exist or is empty (caller can treat that as "no state yet").
  */
@@ -81,7 +102,11 @@ async function collectFiles(dir: string): Promise<string[]> {
       if (e.isDirectory()) {
         await walk(abs);
       } else if (e.isFile()) {
-        out.push(relative(dir, abs).split(/\\/g).join("/"));
+        const rel = relative(dir, abs).split(/\\/g).join("/");
+        // Skip transient / self-referential files so the lineage hash tracks
+        // only the durable brain (see HASH_DENYLIST).
+        if (HASH_DENYLIST.has(rel)) continue;
+        out.push(rel);
       }
     }
   }

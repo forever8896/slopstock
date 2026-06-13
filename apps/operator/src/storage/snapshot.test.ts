@@ -15,10 +15,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
-import { generateKey } from "./crypto.ts";
+import { generateKey, exportKeyToBase64 } from "./crypto.ts";
+import { AesCipher } from "./encryption.ts";
 import { snapshotAgentDir, restoreAgentDir } from "./snapshot.ts";
 
 const TIMEOUT_MS = 60_000;
+
+async function testCipher() {
+  return AesCipher.fromBase64(await exportKeyToBase64(await generateKey()));
+}
 
 async function buildFixtureDir(baseDir: string): Promise<string> {
   const dir = join(baseDir, "agent-fixture");
@@ -73,10 +78,10 @@ describe("Agent snapshot/restore (real Walrus testnet)", () => {
     "full roundtrip: tar→encrypt→walrus→wipe→restore→byte-identical",
     async () => {
       const agentDir = await buildFixtureDir(tmpBase);
-      const key = await generateKey();
+      const cipher = await testCipher();
 
       // Snapshot
-      const blobId = await snapshotAgentDir(agentDir, key);
+      const blobId = await snapshotAgentDir(agentDir, cipher, "3");
       expect(blobId).toBeTruthy();
       expect(typeof blobId).toBe("string");
 
@@ -85,7 +90,7 @@ describe("Agent snapshot/restore (real Walrus testnet)", () => {
       expect(existsSync(agentDir)).toBe(false);
 
       // Restore
-      await restoreAgentDir(agentDir, blobId, key);
+      await restoreAgentDir(agentDir, blobId, cipher, "3");
       expect(existsSync(agentDir)).toBe(true);
 
       // Verify files exist and are byte-identical

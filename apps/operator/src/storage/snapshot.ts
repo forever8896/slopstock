@@ -1,5 +1,5 @@
 /**
- * Agent state snapshot/restore — tar → AES-256-GCM → Walrus.
+ * Agent state snapshot/restore — tar → cipher (AES-256-GCM or Seal) → Walrus.
  *
  * The agent state directory (`data/agents/<tokenId>/`) contains:
  *   - skills/*.md       — self-learned skills
@@ -10,12 +10,12 @@
  *
  * Snapshot flow:
  *   1. tar (deterministic, no timestamps) the whole dir to an in-memory buffer
- *   2. AES-256-GCM encrypt the tarball
+ *   2. Encrypt via SnapshotCipher (AES-256-GCM or Seal)
  *   3. Store on Walrus; return blobId
  *
  * Restore flow:
  *   1. Fetch bytes from Walrus by blobId
- *   2. Decrypt with AES key
+ *   2. Decrypt via SnapshotCipher
  *   3. Untar into target directory
  *
  * The blobId is stored in the receipt next to bundleHashAfter — the receipt
@@ -27,7 +27,7 @@
 
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { encrypt, decrypt, serializeEnvelope, deserializeEnvelope } from "./crypto.ts";
+import type { SnapshotCipher } from "./encryption.ts";
 import { WalrusStorage } from "./walrus-storage.ts";
 
 const walrus = new WalrusStorage();
@@ -36,7 +36,7 @@ const walrus = new WalrusStorage();
  * Snapshot an agent directory to Walrus.
  * Returns the Walrus blobId of the encrypted tarball.
  */
-export async function snapshotAgentDir(agentDir: string, key: CryptoKey): Promise<string> {
+export async function snapshotAgentDir(agentDir: string, cipher: SnapshotCipher, id: string): Promise<string> {
   if (!existsSync(agentDir)) {
     throw new Error(`snapshot: agent dir does not exist: ${agentDir}`);
   }
@@ -44,9 +44,8 @@ export async function snapshotAgentDir(agentDir: string, key: CryptoKey): Promis
   // 1. tar the directory to in-memory bytes
   const tarBytes = await tarDir(agentDir);
 
-  // 2. AES-256-GCM encrypt
-  const envelope = await encrypt(key, tarBytes);
-  const encryptedBytes = serializeEnvelope(envelope);
+  // 2. Encrypt via cipher (AES or Seal)
+  const encryptedBytes = await cipher.encrypt(tarBytes, id);
 
   // 3. Store on Walrus
   const blobId = await walrus.storeBytes(encryptedBytes);
@@ -61,14 +60,14 @@ export async function snapshotAgentDir(agentDir: string, key: CryptoKey): Promis
 export async function restoreAgentDir(
   targetDir: string,
   blobId: string,
-  key: CryptoKey,
+  cipher: SnapshotCipher,
+  id: string,
 ): Promise<void> {
   // 1. Fetch from Walrus
   const encryptedBytes = await walrus.readBytes(blobId);
 
-  // 2. Decrypt
-  const envelope = deserializeEnvelope(encryptedBytes);
-  const tarBytes = await decrypt(key, envelope);
+  // 2. Decrypt via cipher (AES or Seal)
+  const tarBytes = await cipher.decrypt(encryptedBytes, id);
 
   // 3. Create target dir and untar
   await mkdir(targetDir, { recursive: true });

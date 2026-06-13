@@ -18,3 +18,29 @@ test("SealCipher.fromEnv throws a clear error when SEAL_PACKAGE_ID unset", async
   await expect(SealCipher.fromEnv()).rejects.toThrow(/SEAL_PACKAGE_ID/);
   if (prev !== undefined) process.env["SEAL_PACKAGE_ID"] = prev;
 });
+
+test("SealCipher.fromEnv throws a clear error when SEAL_ALLOWLIST_ID unset", async () => {
+  const prevPkg = process.env["SEAL_PACKAGE_ID"];
+  const prevAllowlist = process.env["SEAL_ALLOWLIST_ID"];
+  process.env["SEAL_PACKAGE_ID"] = "0xdeadbeef";
+  delete process.env["SEAL_ALLOWLIST_ID"];
+  await expect(SealCipher.fromEnv()).rejects.toThrow(/SEAL_ALLOWLIST_ID/);
+  if (prevPkg !== undefined) process.env["SEAL_PACKAGE_ID"] = prevPkg;
+  else delete process.env["SEAL_PACKAGE_ID"];
+  if (prevAllowlist !== undefined) process.env["SEAL_ALLOWLIST_ID"] = prevAllowlist;
+});
+
+test("SealCipher.fromEnv throws a clear error when SUI_SEAL_KEYPAIR unset", async () => {
+  const prevPkg = process.env["SEAL_PACKAGE_ID"];
+  const prevAllowlist = process.env["SEAL_ALLOWLIST_ID"];
+  const prevKeypair = process.env["SUI_SEAL_KEYPAIR"];
+  process.env["SEAL_PACKAGE_ID"] = "0xdeadbeef";
+  process.env["SEAL_ALLOWLIST_ID"] = "0xcafebabe";
+  delete process.env["SUI_SEAL_KEYPAIR"];
+  await expect(SealCipher.fromEnv()).rejects.toThrow(/SUI_SEAL_KEYPAIR/);
+  if (prevPkg !== undefined) process.env["SEAL_PACKAGE_ID"] = prevPkg;
+  else delete process.env["SEAL_PACKAGE_ID"];
+  if (prevAllowlist !== undefined) process.env["SEAL_ALLOWLIST_ID"] = prevAllowlist;
+  else delete process.env["SEAL_ALLOWLIST_ID"];
+  if (prevKeypair !== undefined) process.env["SUI_SEAL_KEYPAIR"] = prevKeypair;
+});

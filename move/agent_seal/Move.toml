@@ -1,0 +1,18 @@
+[package]
+name = "agent_seal"
+edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
+# license = ""           # e.g., "MIT", "GPL", "Apache 2.0"
+# authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)"]
+
+[dependencies]
+# Sui framework pinned to the testnet release branch — matches the rev used by
+# Mysten's own Seal example package (MystenLabs/seal examples/move/Move.toml).
+# When publishing to mainnet, switch rev to "framework/mainnet".
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+
+[addresses]
+agent_seal = "0x0"
+
+[dev-dependencies]
+
+[dev-addresses]
