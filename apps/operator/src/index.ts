@@ -25,6 +25,7 @@ import { buildAgentInfoCache, buildClients } from "./chain/clients.ts";
 import { buildReceiptSigner } from "./compute/receipt.ts";
 import { loadConfig } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
+import { startSelfFundingScheduler, type SchedulerHandle } from "./funding/scheduler.ts";
 import { buildMcpServer } from "./mcp/server.ts";
 import { flushPendingPointers } from "./runtime/hermes.ts";
 import { buildRuntimeRouter } from "./runtime/index.ts";
@@ -99,6 +100,15 @@ async function main() {
   process.stderr.write(`[boot] http listening · ready for /healthz\n`);
   console.log(`[stratum/operator] mcp ready on stdio (HTTP transport for AXL pending)`);
 
+  // Self-funding: weekly in-process top-up of the 0G compute ledger from the
+  // operator's accrued USDC (dry-run by default). Never breaks boot.
+  let selfFund: SchedulerHandle | null = null;
+  try {
+    selfFund = startSelfFundingScheduler(config);
+  } catch (e) {
+    console.warn(`[self-fund] scheduler failed to start (non-fatal): ${(e as Error).message}`);
+  }
+
   const shutdown = async (signal: string) => {
     console.log(`[stratum/operator] ${signal} received, shutting down`);
     console.log(`[operator] ${signal} received — flushing pending ENS snapshot pointers…`);
@@ -107,6 +117,7 @@ async function main() {
     } catch (e) {
       console.warn(`[operator] pointer flush failed: ${(e as Error).message}`);
     }
+    selfFund?.stop();
     httpServer.stop();
     await mcpServer.close();
     process.exit(0);
