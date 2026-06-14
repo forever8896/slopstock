@@ -2218,3 +2218,19 @@ select:focus {
 /* docs: address pill */
 .docs-addr { font-family: var(--font-mono), monospace; font-size: 0.86em; background: #fbfaf7; border: 1px solid var(--hair); border-radius: 6px; padding: 1px 6px; color: var(--accent); text-decoration: none; }
 .docs-addr:hover { border-color: var(--accent-dim); }
+
+/* docs: flow diagram */
+.docs-flow { margin: 0 0 28px; border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+.docs-flow-title { font-family: var(--font-mono), monospace; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mute); padding: 12px 18px; border-bottom: 1px solid var(--hair); background: #fbfaf7; }
+.docs-flow-lanes { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--hair); }
+.docs-flow-lane { font-family: var(--font-mono), monospace; font-size: 12px; color: var(--fg-2); background: var(--accent-tint); border: 1px solid var(--accent-dim); border-radius: 6px; padding: 2px 8px; }
+.docs-flow-steps { list-style: none; margin: 0; padding: 0; }
+.docs-flow-step { display: flex; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--hair); }
+.docs-flow-step:last-child { border-bottom: none; }
+.docs-flow-num { font-family: var(--font-mono), monospace; font-size: 12px; font-weight: 700; color: var(--accent); width: 26px; height: 26px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--accent-dim); border-radius: 7px; background: var(--accent-tint); }
+.docs-flow-main { min-width: 0; }
+.docs-flow-actors { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.docs-flow-chip { font-family: var(--font-mono), monospace; font-size: 12px; font-weight: 600; color: var(--fg); }
+.docs-flow-arrow { color: var(--accent); }
+.docs-flow-action { font-size: 15px; line-height: 1.55; color: var(--fg-2); margin: 0; }
+.docs-flow-note { font-family: var(--font-mono), monospace; font-size: 12.5px; color: var(--mute); margin: 4px 0 0; }
