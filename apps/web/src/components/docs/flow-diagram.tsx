@@ -18,7 +18,7 @@ export interface FlowStep {
   note?: string;
 }
 
-export function FlowDiagram({ title, lanes, steps }: { title?: string; lanes: string[]; steps: FlowStep[] }) {
+export function FlowDiagram({ title, lanes = [], steps = [] }: { title?: string; lanes?: string[]; steps?: FlowStep[] }) {
   return (
     <figure className="docs-flow">
       {title ? <figcaption className="docs-flow-title">{title}</figcaption> : null}

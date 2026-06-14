@@ -95,3 +95,7 @@ ml/eval/results/
 # never commit .env backups (may hold secrets)
 .env.bak*
 .env.*.bak
+
+# Docs content lives under a "build/" path — must NOT be caught by the build-output ignore above
+!apps/web/src/content/docs/build/
+!apps/web/src/content/docs/build/**
