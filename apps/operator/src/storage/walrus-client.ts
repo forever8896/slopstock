@@ -117,6 +117,13 @@ export class WalrusClient {
   async readJson<T = unknown>(blobId: string): Promise<T> {
     return JSON.parse(new TextDecoder().decode(await this.read(blobId))) as T;
   }
+
+  /** Public aggregator URL for a blob — directly fetchable by a browser
+   *  (e.g. an <audio src> tag), no operator proxying. Uses the first
+   *  aggregator; all aggregators serve the same content-addressed blob. */
+  publicUrl(blobId: string): string {
+    return `${this.aggregators[0]}/v1/blobs/${blobId}`;
+  }
 }
 
 interface WalrusPutResponse {

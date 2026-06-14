@@ -55,6 +55,7 @@ import {
   settleResponseHeader,
 } from "./x402-v2.ts";
 import { handleDemoScript } from "../agents/demo-script/http-handler.ts";
+import { handleDrillCypher } from "../agents/drill-cypher/http-handler.ts";
 
 export interface HttpDeps {
   config: OperatorConfig;
@@ -226,6 +227,10 @@ export function startHttpServer(deps: HttpDeps) {
 
       if (url.pathname === "/run/demo-script" && req.method === "POST") {
         return handleDemoScript(req, { net: x402Net, facilitator: x402Facilitator });
+      }
+
+      if (url.pathname === "/run/drill-cypher" && req.method === "POST") {
+        return handleDrillCypher(req, { net: x402Net, facilitator: x402Facilitator, config: deps.config });
       }
 
       return withCors(new Response("not found", { status: 404 }));

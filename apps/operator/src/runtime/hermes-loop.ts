@@ -27,6 +27,7 @@ import type { SkillDoc, parseFrontmatter as _parseFrontmatter } from "./hermes.t
 import { parseFrontmatter } from "./hermes.ts";
 import { TOOL_REGISTRY, hashArgs, type ToolCtx } from "./hermes-tools.ts";
 import { buildSkillIndex, upsertSkill } from "./skills.ts";
+import { resolveSecret } from "../store/secrets.ts";
 import type { FrozenMemory } from "./memory-files.ts";
 
 const MAX_TURNS = 8;
@@ -182,6 +183,12 @@ export async function runAgentLoop(input: RunInput): Promise<RunResult> {
     clients: input.clients,
     config,
     peerOperatorUrl: input.peerOperatorUrl,
+    // Bind credential resolution to this agent. Present only when 1Claw is
+    // configured; credentialed tools fail-soft otherwise.
+    resolveSecret:
+      config.ONECLAW_API_KEY && config.ONECLAW_VAULT_ID
+        ? (secretRef: string) => resolveSecret(secretRef, { tokenId: req.tokenId, config })
+        : undefined,
   };
 
   let finalAnswer: string | null = null;
