@@ -70,11 +70,9 @@ const mintAbi = [
   },
 ] as const;
 
-const RUNTIME_TIERS: Array<{ id: RuntimeTier; label: string; sub: string }> = [
-  { id: "openai-compat", label: "openai-compat", sub: "single-shot · no tools" },
-  { id: "tools-lite", label: "tools-lite", sub: "per-call agent loop" },
-  { id: "hermes", label: "hermes", sub: "persistent memory · skill auto-create" },
-];
+// Every launched agent is Hermes on 0G-v4 and starts from this minimal base
+// toolset; it self-improves (skills auto-create) from there.
+const BASE_TOOLS = ["recall", "note", "query_agent"] as const;
 
 export function LaunchClient() {
   const { address, isConnected } = useAccount();
@@ -82,25 +80,29 @@ export function LaunchClient() {
   const { switchChain } = useSwitchChain();
   const onZg = chainId === ZG_CHAIN_ID;
 
+  // Launch-rework: no capability templates, no Venice, no runtime picker. Every
+  // agent is Hermes on 0G-v4; the system prompt IS the agent. templateId is kept
+  // as a hidden constant only because the manifest type still carries it (the
+  // operator ignores it). Tools default to a minimal base set — Hermes seeds the
+  // rest and self-improves.
   const initialTemplate = TEMPLATE_LIST[0] as CapabilityTemplate;
-  const [templateId, setTemplateId] = useState<CapabilityTemplateId>(initialTemplate.id);
+  const templateId: CapabilityTemplateId = initialTemplate.id;
+  const runtimeTier: RuntimeTier = "hermes";
+  const backend: "openai-compat" | "0g-compute" = "0g-compute";
   const [ticker, setTicker] = useState("WHALE");
-  const [description, setDescription] = useState(initialTemplate.blurb);
-  const [systemPrompt, setSystemPrompt] = useState(initialTemplate.systemPrompt);
-  const [runtimeTier, setRuntimeTier] = useState<RuntimeTier>("hermes");
-  const [backend, setBackend] = useState<"openai-compat" | "0g-compute">("0g-compute");
-  const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
+  const [description, setDescription] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
   const [showSkillsEditor, setShowSkillsEditor] = useState(false);
-  const [customSkills, setCustomSkills] = useState<Array<{ name: string; body: string }>>(
-    (initialTemplate.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
-  );
+  const [customSkills, setCustomSkills] = useState<Array<{ name: string; body: string }>>([]);
+  // Tool credentials → provisioned into 1Claw at launch, never into the manifest/model.
+  const [credentials, setCredentials] = useState<Array<{ ref: string; value: string }>>([]);
 
   const ZG_TEE_PROVIDER = "0x1B3AAef3ae5050EEE04ea38cD4B087472BD85EB0";
   const ZG_TEE_NETWORK = "0G mainnet · chainId 16661";
   const [perCall, setPerCall] = useState("0.10");
 
-  type WizStep = "pick" | "identity" | "review" | "live";
-  const [wizStep, setWizStep] = useState<WizStep>("pick");
+  type WizStep = "identity" | "review" | "live";
+  const [wizStep, setWizStep] = useState<WizStep>("identity");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [mintedTokenId, setMintedTokenId] = useState<string | null>(null);
@@ -174,10 +176,13 @@ export function LaunchClient() {
             perCallSmallest: pinnedManifest.pricing.perCallSmallest,
             creator: address,
             txHash,
-            runtime: runtimeTier === "hermes" ? "hermes" : "openai-compat",
-            backend,
+            runtime: "hermes",
+            backend: "0g-compute",
             bundleManifestCid: pinResult.rootHash,
             manifest: pinnedManifest,
+            // Tool credentials → operator provisions each into 1Claw at launch.
+            // Sent once, never persisted client-side or in the manifest.
+            credentials: credentials.filter((c) => c.ref.trim() && c.value),
           }),
         });
         setRegistered(true);
@@ -185,22 +190,7 @@ export function LaunchClient() {
         setRegisterError(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [mintedTokenId, registered, address, txHash, ticker, description, runtimeTier, backend, pinnedManifest, pinResult]);
-
-  const currentTemplate = useMemo<CapabilityTemplate>(
-    () => TEMPLATE_LIST.find((t) => t.id === templateId) ?? initialTemplate,
-    [templateId, initialTemplate],
-  );
-
-  function applyTemplate(t: CapabilityTemplate) {
-    setTemplateId(t.id);
-    setDescription(t.blurb);
-    setSystemPrompt(t.systemPrompt);
-    setTestInput(t.defaultTestInput);
-    setCustomSkills(
-      (t.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
-    );
-  }
+  }, [mintedTokenId, registered, address, txHash, ticker, description, pinnedManifest, pinResult, credentials]);
 
   function buildManifest(creator: Hex): AgentManifest {
     return {
@@ -219,8 +209,8 @@ export function LaunchClient() {
         runtimeTier,
       },
       capabilities: {
-        tools: [...currentTemplate.tools],
-        patterns: (currentTemplate.patterns ?? []).map((p) => ({ name: p.name, body: p.body })),
+        tools: [...BASE_TOOLS],
+        patterns: [],
         skills: customSkills
           .map((s) => ({ name: s.name.trim(), body: s.body }))
           .filter((s) => s.name.length > 0 && s.body.trim().length > 0),
@@ -384,18 +374,11 @@ export function LaunchClient() {
     }
   }
 
-  // Step index for the Rail — all steps before "live" share the rail; live is last.
-  const stepIndex =
-    wizStep === "pick" ? 0 : wizStep === "identity" ? 1 : wizStep === "review" ? 2 : 3;
+  // Step index for the Rail — identity → review → live.
+  const stepIndex = wizStep === "identity" ? 0 : wizStep === "review" ? 1 : 2;
 
   const stepLabel =
-    wizStep === "pick"
-      ? "capability template"
-      : wizStep === "identity"
-        ? "identity + price"
-        : wizStep === "review"
-          ? "review + mint"
-          : "go live";
+    wizStep === "identity" ? "identity + brain" : wizStep === "review" ? "review + mint" : "go live";
 
   // Skills surfaced as a count for the "skills + tools" collapsed row.
   const skillCount = customSkills.filter((s) => s.name.trim() && s.body.trim()).length;
@@ -406,7 +389,7 @@ export function LaunchClient() {
         path={
           <>
             ~/<Link href="/app">markets</Link> · <Link href="/app/launch">launch</Link> ·{" "}
-            <b style={{ color: "var(--fg)" }}>step 0{stepIndex + 1}</b> / 04 · {stepLabel}
+            <b style={{ color: "var(--fg)" }}>step 0{stepIndex + 1}</b> / 03 · {stepLabel}
           </>
         }
         right={
@@ -419,18 +402,12 @@ export function LaunchClient() {
 
       <div style={{ marginBottom: 26 }}>
         <Rail
-          steps={["template", "identity", "review + mint", "go live"]}
+          steps={["identity", "review + mint", "go live"]}
           current={stepIndex}
         />
       </div>
 
-      {wizStep === "pick" ? (
-        <PickStep
-          templateId={templateId}
-          applyTemplate={applyTemplate}
-          onContinue={() => setWizStep("identity")}
-        />
-      ) : wizStep === "identity" ? (
+      {wizStep === "identity" ? (
         <IdentityStep
           ticker={ticker}
           setTicker={setTicker}
@@ -438,31 +415,23 @@ export function LaunchClient() {
           setDescription={setDescription}
           perCall={perCall}
           setPerCall={setPerCall}
-          runtimeTier={runtimeTier}
-          setRuntimeTier={setRuntimeTier}
-          backend={backend}
-          setBackend={setBackend}
-          currentTemplate={currentTemplate}
           systemPrompt={systemPrompt}
           setSystemPrompt={setSystemPrompt}
-          showSystemPromptEditor={showSystemPromptEditor}
-          setShowSystemPromptEditor={setShowSystemPromptEditor}
           customSkills={customSkills}
           setCustomSkills={setCustomSkills}
           showSkillsEditor={showSkillsEditor}
           setShowSkillsEditor={setShowSkillsEditor}
+          credentials={credentials}
+          setCredentials={setCredentials}
           previewManifestHash={previewManifestHash}
           skillCount={skillCount}
-          onBack={() => setWizStep("pick")}
           onContinue={() => setWizStep("review")}
         />
       ) : wizStep === "review" ? (
         <ReviewStep
           ticker={ticker}
           perCall={perCall}
-          currentTemplate={currentTemplate}
-          runtimeTier={runtimeTier}
-          backend={backend}
+          credentialCount={credentials.filter((c) => c.ref.trim() && c.value).length}
           previewManifestHash={previewManifestHash}
           pinResult={pinResult}
           isConnected={isConnected}
@@ -507,82 +476,7 @@ export function LaunchClient() {
   );
 }
 
-/* ───────────── Step 1 · pick capability template ───────────── */
-
-function PickStep({
-  templateId,
-  applyTemplate,
-  onContinue,
-}: {
-  templateId: CapabilityTemplateId;
-  applyTemplate: (t: CapabilityTemplate) => void;
-  onContinue: () => void;
-}) {
-  const selected = TEMPLATE_LIST.find((t) => t.id === templateId);
-  return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 22 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 style={{ fontSize: 30, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
-          pick a capability template
-          <span style={{ color: "var(--accent)" }} className="blink">▌</span>
-        </h1>
-        <span className="mono-h">{TEMPLATE_LIST.length} templates · clone & customize after mint</span>
-      </div>
-      <div style={{ fontSize: 15, color: "var(--fg-2)" }}>
-        each template ships pre-wired tools + a system prompt. you&apos;ll edit them in step 02.
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-          gap: 14,
-        }}
-      >
-        {TEMPLATE_LIST.map((t) => {
-          const skillCount = t.skills?.length ?? 0;
-          const patternCount = t.patterns?.length ?? 0;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              className={`tcard ${templateId === t.id ? "on" : ""}`}
-              onClick={() => applyTemplate(t)}
-            >
-              <div className="tname">{t.label}</div>
-              <div className="tblurb">{t.blurb}</div>
-              <div className="ttools">
-                {t.tools.map((tool) => (
-                  <span key={tool} className="pill solid">{tool}</span>
-                ))}
-              </div>
-              <div className="ttier">
-                <span><b>{t.tools.length}</b> tools</span>
-                <span><b>{skillCount}</b> skill{skillCount === 1 ? "" : "s"}</span>
-                <span><b>{patternCount}</b> pattern{patternCount === 1 ? "" : "s"}</span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-        <div style={{ fontSize: 14, color: "var(--mute)" }}>
-          <span style={{ color: "var(--fg-2)" }}>▌ selected:</span>{" "}
-          <b className="acc">{selected?.label ?? "—"}</b> · pre-wired tools, your prompt + skills next
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Link className="btn" href="/app">esc · cancel</Link>
-          <button className="btn primary" onClick={onContinue}>
-            continue to identity →
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ───────────── Step 2 · identity + price + live manifest ───────────── */
+/* ───────────── Step 1 · identity + brain + credentials ───────────── */
 
 function IdentityStep(props: {
   ticker: string;
@@ -591,30 +485,24 @@ function IdentityStep(props: {
   setDescription: (v: string) => void;
   perCall: string;
   setPerCall: (v: string) => void;
-  runtimeTier: RuntimeTier;
-  setRuntimeTier: (v: RuntimeTier) => void;
-  backend: "openai-compat" | "0g-compute";
-  setBackend: (v: "openai-compat" | "0g-compute") => void;
-  currentTemplate: CapabilityTemplate;
   systemPrompt: string;
   setSystemPrompt: (v: string) => void;
-  showSystemPromptEditor: boolean;
-  setShowSystemPromptEditor: (v: boolean | ((prev: boolean) => boolean)) => void;
   customSkills: Array<{ name: string; body: string }>;
   setCustomSkills: (v: Array<{ name: string; body: string }> | ((prev: Array<{ name: string; body: string }>) => Array<{ name: string; body: string }>)) => void;
   showSkillsEditor: boolean;
   setShowSkillsEditor: (v: boolean | ((prev: boolean) => boolean)) => void;
+  credentials: Array<{ ref: string; value: string }>;
+  setCredentials: (v: Array<{ ref: string; value: string }> | ((prev: Array<{ ref: string; value: string }>) => Array<{ ref: string; value: string }>)) => void;
   previewManifestHash: string | null;
   skillCount: number;
-  onBack: () => void;
   onContinue: () => void;
 }) {
   const {
     ticker, setTicker, description, setDescription, perCall, setPerCall,
-    runtimeTier, setRuntimeTier, backend, setBackend, currentTemplate,
-    systemPrompt, setSystemPrompt, showSystemPromptEditor, setShowSystemPromptEditor,
+    systemPrompt, setSystemPrompt,
     customSkills, setCustomSkills, showSkillsEditor, setShowSkillsEditor,
-    previewManifestHash, skillCount, onBack, onContinue,
+    credentials, setCredentials,
+    previewManifestHash, skillCount, onContinue,
   } = props;
 
   const tickerOk = /^[A-Za-z][A-Za-z0-9]{0,7}$/.test(ticker);
@@ -663,105 +551,86 @@ function IdentityStep(props: {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <div className="ss-field">
-              <label>per-call price</label>
-              <div className="inp">
-                <span className="pre">$</span>
-                <input value={perCall} onChange={(e) => setPerCall(e.target.value)} />
-                <span className="suf">USDC</span>
-              </div>
-              <div className="help">
-                you receive <span className="n" style={{ color: "var(--fg-2)" }}>${priceFee}</span> per call
-              </div>
-            </div>
-            <div className="ss-field">
-              <label>runtime tier</label>
-              <select
-                value={runtimeTier}
-                onChange={(e) => setRuntimeTier(e.target.value as RuntimeTier)}
-                style={{
-                  border: "1px solid var(--hair)",
-                  background: "var(--panel)",
-                  padding: "10px 12px",
-                  fontSize: 16,
-                  height: 48,
-                  color: "var(--fg)",
-                  borderRadius: 2,
-                  fontFamily: "inherit",
-                }}
-              >
-                {RUNTIME_TIERS.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label} · {t.sub}
-                  </option>
-                ))}
-              </select>
-              <div className="help">
-                {runtimeTier === "hermes"
-                  ? "multi-turn agent loop · skills auto-create · runs the same way AUDIT does"
-                  : runtimeTier === "tools-lite"
-                    ? "agent loop with the template's tool whitelist · fresh memory each call"
-                    : "single-shot · system prompt + model · no tools"}
-              </div>
-            </div>
-          </div>
-
           <div className="ss-field">
-            <label>compute backend</label>
-            <div className="pay-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
-              <button
-                type="button"
-                className={`pay-card ${backend === "0g-compute" ? "on" : ""}`}
-                onClick={() => setBackend("0g-compute")}
-              >
-                <div className="h">
-                  <span className="t">0g compute · TEE</span>
-                  <span className="badge">deepseek v3</span>
-                </div>
-                <div className="body">
-                  intel TDX enclave on 0G mainnet. every reply signed by the on-chain TEE signer.
-                </div>
-              </button>
-              <button
-                type="button"
-                className={`pay-card ${backend === "openai-compat" ? "on" : ""}`}
-                onClick={() => setBackend("openai-compat")}
-              >
-                <div className="h">
-                  <span className="t">venice · hosted</span>
-                  <span className="badge">model breadth</span>
-                </div>
-                <div className="body">
-                  qwen, claude, grok, gemma. fast and cheap. no TEE attestation.
-                </div>
-              </button>
+            <label>per-call price</label>
+            <div className="inp">
+              <span className="pre">$</span>
+              <input value={perCall} onChange={(e) => setPerCall(e.target.value)} />
+              <span className="suf">USDC</span>
+            </div>
+            <div className="help">
+              you receive <span className="n" style={{ color: "var(--fg-2)" }}>${priceFee}</span> per call ·
+              runtime <b style={{ color: "var(--fg-2)" }}>hermes</b> on{" "}
+              <b style={{ color: "var(--fg-2)" }}>0G compute · intel TDX</b> (deepseek v3, every reply TEE-signed)
             </div>
           </div>
 
-          {/* Collapsed editors — system prompt + skills */}
-          <button
-            type="button"
-            className="panel"
-            onClick={() => setShowSystemPromptEditor((v) => !v)}
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", cursor: "pointer", textAlign: "left", color: "inherit", fontFamily: "inherit", fontSize: "inherit", border: "1px solid var(--hair)" }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ color: "var(--mute)" }}>{showSystemPromptEditor ? "▾" : "▸"}</span>
-              <span style={{ color: "var(--fg-2)" }}>system prompt editor</span>
-              <span className="pill solid">template default · {systemPrompt.length} chars</span>
-            </span>
-            <span className="mono-h">{showSystemPromptEditor ? "collapse" : "expand"}</span>
-          </button>
-          {showSystemPromptEditor ? (
+          {/* System prompt — it IS the agent (required). */}
+          <div className="ss-field">
+            <label>system prompt · this IS the agent</label>
             <textarea
               value={systemPrompt}
               onChange={(e) => setSystemPrompt(e.target.value)}
               spellCheck={false}
               className="req"
-              style={{ minHeight: 180 }}
+              placeholder="You are … — describe the agent's role, expertise, tone, and how it should use its tools. Hermes grows skills from here."
+              style={{ minHeight: 200 }}
             />
-          ) : null}
+            <div className="help">
+              <span className="n">{systemPrompt.length}</span> chars · seeds the Hermes agent dir; it self-improves from here
+            </div>
+          </div>
+
+          {/* Tool credentials → 1Claw (never in the manifest or model context). */}
+          <div className="ss-field">
+            <label>tool credentials · stored in 1Claw</label>
+            <div className="help" style={{ marginTop: -2, marginBottom: 8 }}>
+              keys for any API your tools call (e.g. <code>elevenlabs</code>). stored in 1Claw&apos;s HSM at
+              launch, fetched just-in-time — <b style={{ color: "var(--fg-2)" }}>never</b> in the manifest,
+              model context, or receipt.
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {credentials.map((c, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    value={c.ref}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCredentials((arr) => arr.map((x, j) => (j === i ? { ...x, ref: v } : x)));
+                    }}
+                    placeholder="ref · e.g. elevenlabs"
+                    style={{ flex: "0 0 200px", background: "#0a0a0a", border: "1px solid var(--hair)", padding: "8px 10px", color: "var(--fg)", fontSize: 14, borderRadius: 2, fontFamily: "inherit" }}
+                  />
+                  <input
+                    type="password"
+                    value={c.value}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCredentials((arr) => arr.map((x, j) => (j === i ? { ...x, value: v } : x)));
+                    }}
+                    placeholder="api key · write-only, sent to 1Claw"
+                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid var(--hair)", padding: "8px 10px", color: "var(--fg)", fontSize: 14, borderRadius: 2, fontFamily: "inherit" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCredentials((arr) => arr.filter((_, j) => j !== i))}
+                    style={{ border: "1px solid rgba(239,68,68,0.4)", color: "var(--red)", padding: "6px 10px", borderRadius: 2, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <div>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setCredentials((arr) => [...arr, { ref: "", value: "" }])}
+                >
+                  + add credential
+                </button>
+              </div>
+            </div>
+          </div>
 
           <button
             type="button"
@@ -821,11 +690,9 @@ function IdentityStep(props: {
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => setCustomSkills(
-                    (currentTemplate.skills ?? []).map((s) => ({ name: s.name, body: s.body })),
-                  )}
+                  onClick={() => setCustomSkills([])}
                 >
-                  reset to template default
+                  clear all
                 </button>
               </div>
             </div>
@@ -841,18 +708,18 @@ function IdentityStep(props: {
           <pre className="ascii" style={{ margin: 0, padding: "14px 16px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre" }}>
 {`┌─ agent.manifest ─────────────────┐
 │  ticker     ${truncFit((ticker || "—").toUpperCase() + ".slopstock.eth", 22).padEnd(22)}│
-│  template   ${truncFit(currentTemplate.id, 22).padEnd(22)}│
 │  price      ${truncFit("$" + (perCall || "0.00") + " USDC / call", 22).padEnd(22)}│
-│  runtime    ${truncFit(runtimeTier, 22).padEnd(22)}│
-│  backend    ${truncFit(backend === "0g-compute" ? "0g · intel tdx" : "venice", 22).padEnd(22)}│
-├─ tools (${currentTemplate.tools.length}) ──────────────────────┤`}
+│  runtime    ${truncFit("hermes", 22).padEnd(22)}│
+│  backend    ${truncFit("0g · intel tdx", 22).padEnd(22)}│
+│  secrets    ${truncFit(credentials.filter((c) => c.ref.trim() && c.value).length + " key(s) → 1claw", 22).padEnd(22)}│
+├─ tools (${BASE_TOOLS.length}) ──────────────────────┤`}
 {"\n"}
-{currentTemplate.tools.map((t) => `│  ▸ ${t.padEnd(30)}│`).join("\n")}
+{BASE_TOOLS.map((t) => `│  ▸ ${t.padEnd(30)}│`).join("\n")}
 {"\n"}
 {`├─ skills (${skillCount}) ──────────────────────┤`}
 {"\n"}
 {skillCount === 0
-  ? "│  (none yet · template default replaced)│"
+  ? "│  (none yet · hermes grows its own)   │"
   : customSkills
       .filter((s) => s.name.trim() && s.body.trim())
       .slice(0, 6)
@@ -877,11 +744,11 @@ function IdentityStep(props: {
           changes auto-saved to local draft · hash recomputes on every edit
         </span>
         <div style={{ display: "flex", gap: 10 }}>
-          <button className="btn" onClick={onBack}>← back</button>
+          <Link className="btn" href="/app">esc · cancel</Link>
           <button
             className="btn primary"
             onClick={onContinue}
-            disabled={!tickerOk || !description.trim() || !perCall.trim()}
+            disabled={!tickerOk || !description.trim() || !perCall.trim() || !systemPrompt.trim()}
           >
             review + mint →
           </button>
@@ -896,9 +763,7 @@ function IdentityStep(props: {
 function ReviewStep(props: {
   ticker: string;
   perCall: string;
-  currentTemplate: CapabilityTemplate;
-  runtimeTier: RuntimeTier;
-  backend: "openai-compat" | "0g-compute";
+  credentialCount: number;
   previewManifestHash: string | null;
   pinResult: { rootHash: string; uri: string; size: number } | null;
   isConnected: boolean;
@@ -916,7 +781,7 @@ function ReviewStep(props: {
   onBack: () => void;
 }) {
   const {
-    ticker, perCall, currentTemplate, runtimeTier, backend, previewManifestHash,
+    ticker, perCall, credentialCount, previewManifestHash,
     pinResult, isConnected, onZg, chainId, switchChainTo, mint, pinning, txPending,
     mintedTokenId, txHash, errorMsg, pinError, registerError, onBack,
   } = props;
@@ -978,12 +843,12 @@ function ReviewStep(props: {
             </div>
             <div className="kv" style={{ padding: "10px 0" }}>
               <div className="k">ticker</div><div className="v"><b style={{ letterSpacing: "0.04em" }}>{ticker.toUpperCase()}.slopstock.eth</b></div>
-              <div className="k">template</div><div className="v">{currentTemplate.label}</div>
               <div className="k">price</div><div className="v" style={{ color: "var(--accent)" }}>${perCall} USDC</div>
               <div className="k">protocol fee</div><div className="v">5% · ${(Number(perCall) * 0.05).toFixed(2)} / call</div>
-              <div className="k">runtime</div><div className="v">{runtimeTier}</div>
-              <div className="k">compute</div><div className="v">{backend === "0g-compute" ? "0G compute · intel tdx" : "venice · hosted"}</div>
-              <div className="k">tools</div><div className="v">{currentTemplate.tools.join(", ")}</div>
+              <div className="k">runtime</div><div className="v">hermes</div>
+              <div className="k">compute</div><div className="v">0G compute · intel tdx</div>
+              <div className="k">tools</div><div className="v">{BASE_TOOLS.join(", ")} · hermes base</div>
+              <div className="k">secrets</div><div className="v">{credentialCount} key(s) → 1Claw</div>
             </div>
           </div>
 

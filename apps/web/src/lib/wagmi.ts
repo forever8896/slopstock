@@ -1,4 +1,5 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
+import { rainbowWallet, metaMaskWallet, walletConnectWallet, injectedWallet } from "@rainbow-me/rainbowkit/wallets";
 import { baseSepolia, sepolia } from "wagmi/chains";
 import { http, fallback, type Chain } from "viem";
 
@@ -24,6 +25,12 @@ export const zgGalileo = {
 export const wagmiConfig = getDefaultConfig({
   appName: "Stratum",
   projectId: process.env["NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID"] ?? "stratum-dev",
+  // Explicit wallet list (overrides the default) so the Base Account wallet is
+  // never built — it pulls @base-org/account whose nested noble-2.x breaks the
+  // build (also aliased out in next.config). getDefaultConfig keeps SSR-safe storage.
+  wallets: [
+    { groupName: "Popular", wallets: [rainbowWallet, metaMaskWallet, walletConnectWallet, injectedWallet] },
+  ],
   chains: [zgGalileo, baseSepolia, sepolia],
   transports: {
     [zgGalileo.id]: http(),

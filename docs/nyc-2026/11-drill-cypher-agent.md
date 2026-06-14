@@ -279,17 +279,37 @@ pay 3 USDC, and play the resulting drill track from a Walrus URL on the platform
 - [ ] Web platform shows an inline audio player after a successful run — judges can play
       the track without leaving the Slopstock UI.
 
-## De-risk result
+## Build status (2026-06-14)
 
-_(Fill this in after running the smoke-elevenlabs-music.ts gate script.)_
+**Steps 1–5 BUILT & GREEN; pipeline PROVEN LIVE end-to-end** on the verified-live
+1Claw capability ([09](09-agent-secrets.md)). The credential design was upgraded from
+plan-11 Tier-1 (operator env) to **1Claw-only** (no env path) per the build call.
+
+- `apps/operator/src/agents/drill-cypher/`: `generate-lyrics.ts` (0G deepseek-v3, drill
+  moat prompt in `@stratum/shared`), `tools.ts` (ElevenLabs, key via 1Claw `resolveKey`,
+  leak-guarded), `store-audio.ts` (Walrus pin → public `aggregatorUrl`), `run.ts`
+  (orchestration), `http-handler.ts` (`POST /run/drill-cypher`, x402 $3.00). 14/14 tests.
+- Route registered in `server.ts`; `WalrusClient.publicUrl()` added for the audio player.
+- **Live e2e** (`scripts/smoke-drill-cypher.ts`): real 0G lyrics (good drill, named the
+  opps) → **real 1Claw key resolution** → **real Walrus store + read-back** (24KB byte-
+  match). ElevenLabs HTTP is mocked ONLY because no key exists yet (gate below).
+
+**Remaining = the Step-0 audio gate + web UI:** needs a real ElevenLabs Music v2 key
+(store it via `provisionSecret('elevenlabs',{tokenId:4})` → 1Claw, then run the gate to
+confirm endpoint/body/quality and un-mock `tools.ts`); then Step 6 web `<audio>` card.
+
+## De-risk result
 
 | Field | Result |
 |---|---|
-| Endpoint used | `TBD` |
-| Response time | `TBD` |
-| Audio quality verdict | `TBD` |
-| ElevenLabs pricing per call | `TBD` |
-| Gate status | 🔲 not yet run |
+| Endpoint used | `https://api.elevenlabs.io/v1/music` (default; **un-verified — needs key**) |
+| Response time | `TBD (gate pending — no ElevenLabs key yet)` |
+| Audio quality verdict | `TBD (gate pending)` |
+| ElevenLabs pricing per call | `TBD (gate pending)` |
+| 1Claw key resolution | ✅ **LIVE** (resolved inside `smoke-drill-cypher.ts`) |
+| Walrus store + retrieve | ✅ **LIVE** (blob stored + read back byte-identical) |
+| 0G drill lyrics | ✅ **LIVE** (deepseek-v3, named opps, on-style) |
+| Gate status | 🟡 pipeline live; ElevenLabs audio gate blocked on a paid key |
 
 ## Stop-losses
 

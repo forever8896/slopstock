@@ -11,3 +11,4 @@ export * from "./og-storage";
 export * from "./network";
 export * from "./erc7930";
 export * from "./agents/demo-script/system-prompt";
+export * from "./agents/drill-cypher/system-prompt";

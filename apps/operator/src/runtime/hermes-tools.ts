@@ -66,6 +66,12 @@ export interface ToolCtx {
   /** URL where peer agents are served. v1: same operator process; v2: per-
    *  agent operator URL discovered via ENS / AgentRegistry. */
   peerOperatorUrl: string;
+  /** Resolve a credentialed-tool secret (e.g. an API key) just-in-time from
+   *  1Claw, scoped to THIS agent's tokenId. Call it inside the handler right
+   *  before the outbound request; the value must NEVER be returned to the model
+   *  or written to the receipt. Undefined when 1Claw isn't configured — a
+   *  credentialed tool should then fail-soft, not crash the loop. */
+  resolveSecret?: (secretRef: string) => Promise<string>;
 }
 
 export interface ToolResult {
