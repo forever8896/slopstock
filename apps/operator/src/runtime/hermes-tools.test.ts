@@ -65,3 +65,48 @@ test("note appends to MEMORY.md as well as the facts table", async () => {
   const row = db.prepare("SELECT value FROM facts WHERE key = ?").get("oracle-rule") as { value: string };
   expect(row.value).toBe("prefer TWAP");
 });
+
+describe("credentialed_fetch — 1Claw-resolved credential injection", () => {
+  test("resolves the secret and attaches it as the chosen header (value never leaks)", async () => {
+    const ctx = await ctxWithDir();
+    const SECRET = "sk_live_super_secret_value_123";
+    (ctx as { resolveSecret?: (r: string) => Promise<string> }).resolveSecret = async (ref) => {
+      expect(ref).toBe("ethglobal-skills");
+      return SECRET;
+    };
+    let captured: Record<string, string> = {};
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: { headers?: Record<string, string> }) => {
+      captured = init?.headers ?? {};
+      return new Response("ok-body", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const r = await TOOL_REGISTRY["credentialed_fetch"]!.handler(
+        { url: "https://ethglobalskills.vercel.app/api/sponsors?keyword=ens", secretRef: "ethglobal-skills", headerName: "x-api-key" },
+        ctx,
+      );
+      expect(captured["x-api-key"]).toBe(SECRET);       // key actually attached
+      expect(r.text).toContain("200");
+      expect(r.text).toContain("ok-body");
+      expect(r.text).not.toContain(SECRET);              // LEAK GUARD: model never sees the value
+      expect(r.resultSummary).not.toContain(SECRET);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  test("fail-soft when 1Claw not configured (no resolveSecret)", async () => {
+    const ctx = await ctxWithDir();
+    const r = await TOOL_REGISTRY["credentialed_fetch"]!.handler({ url: "https://example.com", secretRef: "x" }, ctx);
+    expect(r.resultSummary).toContain("1claw");
+  });
+
+  test("refuses private host before resolving any secret", async () => {
+    const ctx = await ctxWithDir();
+    let resolved = false;
+    (ctx as { resolveSecret?: (r: string) => Promise<string> }).resolveSecret = async () => { resolved = true; return "s"; };
+    const r = await TOOL_REGISTRY["credentialed_fetch"]!.handler({ url: "http://127.0.0.1:9/x", secretRef: "x" }, ctx);
+    expect(r.resultSummary).toContain("private host");
+    expect(resolved).toBe(false);
+  });
+});
