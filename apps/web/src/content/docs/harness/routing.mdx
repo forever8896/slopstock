@@ -1,0 +1,72 @@
+---
+title: Runtime × backend routing
+description: "The two orthogonal axes — runtime and compute backend — the resulting matrix, the per-tokenId selection precedence, and why launched agents always route to Hermes on 0g-compute."
+---
+
+A Slopstock agent's behavior is set by two independent choices: *which runtime* wraps
+the model call, and *which backend* the call physically goes to. These are orthogonal —
+any runtime can sit on any backend — and the router resolves both, per `tokenId`. The
+source of truth is the operator's `runtime/index.ts`.
+
+## Two orthogonal axes
+
+The first axis is the **runtime** — the layer above the LLM call:
+
+- **`hermes`** — the full stateful harness: the task loop, tools, skills, and
+  three-layer memory described across the rest of this section.
+- **`openai-compat`** — a single-shot LLM call wrapped in the same runtime interface.
+  Stateless: no loop, no tools, no skills, no memory.
+
+The second axis is the **compute backend** — where the call physically goes:
+
+- **`0g-compute`** — routed through 0G's compute SDK for sealed, TeeML-verified
+  inference inside an Intel TDX (or H100/H200) enclave. This is the
+  [sealed inference](/docs/protocol/sealed-inference) path that yields an attestation.
+- **`openai-compat`** — plain HTTP to any OpenAI-shaped endpoint (Ollama, OpenRouter,
+  and the like). Unsealed; the attestation slot in the receipt is empty by design.
+
+Because the axes are independent, the runtime kind and the backend kind compose freely —
+which is exactly what the matrix below enumerates.
+
+## The matrix
+
+<HarnessMatrix />
+
+The cell that matters in production is **hermes × 0g-compute**: the full harness on
+sealed inference. The other three cells exist for development and for cheaper modes —
+the harness on a plain endpoint (stateful but unsealed, good for local iteration), a
+single sealed call with no agent loop (cheap attested inference), and a single plain
+call (the simplest baseline).
+
+## Selection precedence
+
+For a given `tokenId` the router resolves the runtime, then the backend, each with an
+env override that falls back to a global default:
+
+| Choice | Per-token override | Global fallback |
+| --- | --- | --- |
+| Runtime | `RUNTIME_BY_TOKEN_ID` | `AGENT_RUNTIME` |
+| Backend | `BACKEND_BY_TOKEN_ID` | `COMPUTE_BACKEND` |
+
+So the order is: `RUNTIME_BY_TOKEN_ID` → `AGENT_RUNTIME` → `BACKEND_BY_TOKEN_ID` →
+`COMPUTE_BACKEND`. The chosen backend is held inside the runtime instance. Hermes
+runtimes are built per-token (state is per-token), each with its own backend;
+`openai-compat` runtimes are stateless, so the router caches and shares them by backend
+kind rather than constructing one per token.
+
+## Launched agents
+
+There is one override that sits *above* the precedence table. Agents minted through
+`/launch` live in a dynamic registry, and their config — runtime, model, system prompt —
+comes from that registry, not from the static env. For every such agent the rule is
+fixed: **launched agents always route to Hermes on 0g-compute**, on the single shared 0G
+compute v4 backend (**deepseek-v4-flash** on 0G mainnet). The router seeds the agent's
+system prompt into its data dir and returns a fresh `HermesAgentRuntime` on the sealed
+backend — deliberately *not* cached, because the registry can change at runtime.
+
+<Callout variant="note" title="The production path is not configurable">
+Static env-driven agents can be pointed at any cell of the matrix for development. A
+*launched* agent cannot: it is always the full harness on sealed inference. That is the
+combination that makes a Slopstock agent both an improving brain and a provable one —
+the harness for competence, 0g-compute for the attestation.
+</Callout>

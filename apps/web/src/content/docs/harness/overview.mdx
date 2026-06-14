@@ -1,0 +1,115 @@
+---
+title: Hermes overview
+description: "What the harness is, why it's the Hermes-pattern (not the Nous binary), the stateful task loop, and the on-disk layout of an agent's brain."
+---
+
+The harness is the layer that turns a model call into an *agent* — something that
+holds state, calls tools, accrues skills, and remembers what it learned. Sealed
+inference ([Sealed inference](/docs/protocol/sealed-inference)) proves the right model
+ran; the harness is everything that sits *above* that call. It is what makes a
+Slopstock agent a productive, improving asset rather than a one-shot prompt.
+
+## What the harness is
+
+`HermesAgentRuntime` is a stateful, skill-accumulating runtime. Each agent gets its
+own brain on disk — a directory of self-authored skills, a SQLite memory database, a
+system prompt, and a lockfile recording the brain's content hash. When a paying
+subscriber calls the agent, the runtime hydrates that brain, runs a multi-turn task
+loop against the model, lets the agent write new skills and notes back to disk, and
+returns a signed receipt that commits to exactly how the brain moved.
+
+The runtime is built per `tokenId`, because state is per-token: agent #1 and agent #3
+are different brains in different directories, each with its own skills and memory. The
+backend it talks to (where the model call physically goes) is held inside the runtime
+instance — see [Runtime × backend routing](/docs/harness/routing).
+
+## Hermes-pattern (honest framing)
+
+The pattern is derived from Nous Research's **Hermes Agent**: an
+[agentskills.io](https://agentskills.io)-compatible skill format, three-layer memory,
+and autonomous skill creation after hard tasks. Slopstock does **not** shell out to
+the upstream Python binary, and it does **not** run the Nous Hermes model. It
+implements the same *pattern* natively in TypeScript, so the operator stays a single
+Bun process with no second runtime to supervise.
+
+<Callout variant="note" title="Hermes-pattern, not Hermes">
+The harness is the Hermes-**pattern**: a from-scratch TypeScript implementation of the
+agent loop, the skill format, and the layered memory — not literally the Nous Hermes
+model and not the upstream Python agent. The name describes the architecture, not the
+weights. The runtime's own source header puts it plainly: "we are 'Hermes-pattern' not
+'literally running Hermes.'" Wherever these docs say "Hermes," read "the Hermes-pattern
+harness."
+</Callout>
+
+One deliberate deviation from upstream is worth naming: the agent calls tools by
+emitting a JSON object in plain text (`{"tool": "...", "args": {...}}`) rather than via
+a provider's native function-calling roles. That is a constraint of the sealed brain —
+the model runs inside the TEE on 0G compute — and it is kept on purpose, not a gap to
+be patched.
+
+## The task loop
+
+Each call (`runTask`) is a fresh Hermes "session". The runtime reloads skills and
+frozen memory from disk first — so a skill the agent wrote during an earlier task in
+the same process is reflected in this one — then hands off to the loop:
+
+<Steps>
+<Step n={1} title="Assemble the system prompt">
+The agent's role definition, its frozen Layer-1 memory, the tool list, and a **Level-0
+skill index** (skill names + descriptions, never bodies) are assembled into one
+system message. The subscriber's input becomes the first user message.
+</Step>
+<Step n={2} title="Turn: model → parse">
+The loop calls the backend and parses the reply. A reply is either a tool call (a JSON
+object with a `tool` field), a final answer (any other JSON object), or unparseable
+(which earns a nudge and a retry).
+</Step>
+<Step n={3} title="Execute the tool, feed the result back">
+A tool call is dispatched against the tool registry; its textual result is appended to
+the conversation and the next turn begins. Every step — model turns, tool calls,
+memory reads and writes, skill loads — is recorded into the transcript that lands in
+the receipt.
+</Step>
+<Step n={4} title="Finish — with an integrity guard">
+The loop accepts a final answer and stops. If the agent tries to answer *before
+calling any tool* while tools are available, the loop rejects it and forces at least
+one real tool call — so the agent can't fabricate "I checked X" without checking X.
+The loop runs to a final answer or hits a turn ceiling (8 turns), in which case it
+returns an honest "did not converge" stub.
+</Step>
+<Step n={5} title="Learn, then commit">
+After a hard task (5+ tool calls, or a run where the agent hit a tool error and
+recovered), the agent synthesizes a skill and upserts it to disk. The runtime then
+re-hashes the brain; if it changed, it bumps the bundle version and fires a Walrus
+snapshot off the hot path. See [Snapshot & restore](/docs/harness/snapshots).
+</Step>
+</Steps>
+
+## On-disk layout
+
+Every agent's brain lives under `AGENTS_DATA_DIR/<tokenId>/`:
+
+```text
+AGENTS_DATA_DIR/<tokenId>/
+  skills/                 self-authored skills, one Markdown file each
+    reentrancy.md
+    access-control.md
+    ...
+  patterns/              read-only shared known-pattern library
+  memory.db             SQLite (FTS5) — messages, facts, task_log
+  system.md             the agent's system prompt (role + final-answer schema)
+  bundle.lock.json      { bundleHash, version, lastUpdated }
+  MEMORY.md / USER.md    human-readable Layer-1 frozen memory (when present)
+```
+
+These are the real names the runtime reads and writes. `skills/`, `patterns/`,
+`memory.db`, `system.md`, and the Layer-1 files are the durable **brain**; they are
+what gets hashed into the bundle hash and packed into a snapshot. `bundle.lock.json` is
+self-referential bookkeeping (it stores the hash itself) and is deliberately excluded
+from the lineage hash — covered under [Snapshot & restore](/docs/harness/snapshots).
+
+The two paths that populate this directory: the **seed path** (canonical agents like
+AUDIT copy from `seed/agents/<tokenId>/` on first run) and the **manifest path**
+(permissionless mints point the runtime at a pre-materialized bundle dir and a tool
+whitelist). A third entry path — restoring a wiped directory from Walrus via the agent's
+ENS pointer — is what makes the operator stateless.

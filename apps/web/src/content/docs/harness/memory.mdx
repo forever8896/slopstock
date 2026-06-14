@@ -1,0 +1,70 @@
+---
+title: Three-layer memory
+description: "The agent's three memory layers — working context, frozen human-readable files (MEMORY.md / USER.md), and a queryable SQLite FTS5 store — and why they reload per task."
+---
+
+An agent that can't remember is just a prompt. Slopstock's harness gives each agent a
+three-layer memory, mirroring real Hermes: ephemeral working context for the task in
+hand, a small frozen set of human-readable files curated across sessions, and a
+queryable database of everything it has ever seen. The layers trade off freshness,
+boundedness, and recall — each does the job the others can't.
+
+## Layer 0 — working
+
+Layer 0 is the conversation itself: the running message log of the current task. The
+system prompt, the subscriber's input, every model turn, every tool result. It is
+ephemeral — it lives only for the duration of one `runTask` call and is never persisted
+as "memory" (though the transcript of *what happened* is recorded into the receipt for
+auditability). This is the layer the model reasons over turn to turn.
+
+## Layer 1 — files (MEMORY.md / USER.md)
+
+Layer 1 is two human-readable Markdown files in the agent's brain directory:
+
+- **`MEMORY.md`** — curated facts the agent chose to remember across audits.
+- **`USER.md`** — durable notes about the caller / preferences.
+
+These are read **once** at session start (`loadFrozenMemory`) and embedded immutably
+into the system prompt under a "what you remember (read-only this session)" block —
+hence *frozen*: the agent reads them but doesn't rewrite them mid-turn. They are
+deliberately **bounded** so memory growth never blows the context window: `MEMORY.md` is
+capped at 4000 characters and `USER.md` at 2000, oversized files are truncated on read,
+and `appendMemoryLine` trims the oldest bullets to stay under the cap when new facts are
+added. This is Hermes' "bounded, curated memory."
+
+Because Layer 1 is plain Markdown, it is also the layer a human can *read*. That makes
+the [Walrus amnesia demo](/docs/harness/snapshots) legible: wipe the agent, restore from
+Walrus, and the audience reads what it remembered — not an opaque `.db`.
+
+## Layer 2 — SQLite FTS5
+
+Layer 2 is `memory.db`, a SQLite database (with an FTS5 full-text index where the Bun
+build supports it) that holds everything, queryably:
+
+- **`messages`** — an FTS5 virtual table of message content, for full-text recall.
+- **`facts`** — a key/value table of noted facts.
+- **`task_log`** — one row per completed task (callId, tokenId, subscriber, a one-line
+  summary), indexed by token and time.
+
+The agent reaches Layer 2 through tools: `recall` runs a full-text search over past
+messages (falling back to `LIKE` when FTS5 isn't available), and `note` writes a fact.
+Crucially, `note` is a **bridge between Layer 2 and Layer 1**: it writes the fact into
+the `facts` table *and* mirrors it as a bullet into `MEMORY.md` — so a noted fact is
+both queryable now and frozen into the next session's prompt.
+
+<Callout variant="note" title="Two writes, one note">
+A single `note` call lands in two places on purpose: the SQLite `facts` table (queryable
+this session via `recall`) and `MEMORY.md` (frozen into the next session's system prompt,
+and packed into the next Walrus snapshot). One is for machine recall, the other for
+durable, human-readable continuity.
+</Callout>
+
+## Reload per task
+
+Skills and frozen memory are **reloaded from disk at the start of every `runTask`** —
+not cached for the lifetime of the process. The runtime re-runs `loadSkills` and
+`loadFrozenMemory` before each task, so a skill the agent wrote or a fact it noted
+during an earlier task in the same process is reflected in the next task's
+(frozen-for-the-turn) prompt. The brain is read fresh each time, mutated during the
+task, written back, re-hashed, and — if it changed — snapshotted. That per-task reload
+is what lets an agent visibly improve across two back-to-back calls.

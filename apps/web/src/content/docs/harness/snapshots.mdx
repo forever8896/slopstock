@@ -1,0 +1,98 @@
+---
+title: Snapshot & restore
+description: "How the agent's brain is hashed deterministically, snapshotted to encrypted Walrus blobs, addressed by a mutable ENS pointer, restored byte-identical, and how receipts fold in for cold-start."
+---
+
+The harness produces durable, transferable agent state — and it has to, because
+"agents as property" is only true if the brain can move. This page describes snapshot
+and restore from the **agent-state** angle: what gets hashed, what gets packed, and how
+a wiped operator rehydrates an agent from chain plus Walrus alone. The storage layer
+itself — Walrus, the Seal cipher, the ENS pointer — is owned by
+[Walrus stateless storage](/docs/protocol/walrus); here we cover how the harness drives it.
+
+## Bundle hash
+
+The bundle hash is the deterministic content hash of an agent's durable brain. It is
+what the iNFT commits on-chain, and it advances as the agent learns, so the token's
+value can track accumulated competence.
+
+`hashBundleDir` walks the brain directory sorted by relative path, hashes each file as
+`keccak256(path ‖ 0x00 ‖ sha256(content))`, then `keccak256` over the concatenation of
+the per-file hashes. Sorting plus per-file path-binding makes the result stable and
+order-independent: two operators holding the same on-disk state produce the same bundle
+hash.
+
+Two files are **excluded** from the lineage hash even though they ride along inside the
+snapshot:
+
+- **`bundle.lock.json`** — it stores the bundle hash itself (plus a mutable
+  `walrusSnapshotBlobId` and `lastUpdated`), so hashing it would be circular and would
+  change on every snapshot.
+- **`receipts.ndjson`** — a rebuildable cache of the receipt tape folded in for portable
+  restore; it is derived audit output, not brain state.
+
+Excluding both is what makes the write-time hash and the cold-restore re-hash agree
+regardless of whether receipts or a lockfile are present. The durable brain —
+`memory.db`, `system.md`, `skills/*`, `patterns/*` — stays hashed. After each task the
+runtime computes the hash before and after the loop; if it moved, `stateDeltaHash =
+keccak256(before ‖ after)` is the proof-of-transition that lands in the
+[signed receipt](/docs/protocol/sealed-inference).
+
+## Snapshot to Walrus
+
+When (and only when) a task changes the brain, the runtime fires a snapshot off the hot
+path — fire-and-forget, so the subscriber's response is never delayed. The chain is:
+fold receipts into the dir, deterministically tar it, encrypt, upload, and repoint ENS.
+
+- **Receipts fold-in.** `exportAgentReceipts(tokenId)` is written to `receipts.ndjson`
+  *before* taring, so the snapshot captures them.
+- **Deterministic tar.** The directory contents are tarred with no timestamps and
+  numeric owners, so identical state yields identical bytes.
+- **Encrypt.** The tar is encrypted by the configured `SnapshotCipher` —
+  **AES-256-GCM** by default, or **Seal** threshold IBE when enabled.
+- **Upload.** The ciphertext is stored on Walrus, which returns a content-addressed
+  `blobId`. The blobId is recorded in `bundle.lock.json` and (when enabled) published to
+  the agent's ENS pointer.
+
+## Restore from ENS pointer
+
+On `load`, if an agent's brain directory is missing — e.g. after an amnesia wipe — the
+runtime tries to restore *before* falling back to the seed copy. It resolves the agent's
+ENS name, reads the **`agent-snapshot`** text record (`readSnapshotPointer`) to get the
+current Walrus `blobId`, fetches that blob, decrypts it, and untars it back into place
+byte-identical. Any `receipts.ndjson` inside is re-ingested (`importAgentReceipts`) so
+the receipt tape is rebuilt. Because the pointer lives on-chain and the blob lives on
+Walrus, a fully stateless operator can rehydrate any agent from chain plus Walrus alone —
+the local disk is an optional cache, not a hard dependency.
+
+<FlowDiagram
+  title="snapshot & restore (agent brain → Walrus → cold-boot)"
+  lanes={["hermes runtime", "cipher (AES / Seal)", "Walrus (Sui)", "ENS agent-snapshot (L1)"]}
+  steps={[
+    { from: 0, to: 0, action: "task changed the brain → fold receipts, then tar", note: "exportAgentReceipts → deterministic tar (no mtime)" },
+    { from: 0, to: 1, action: "encrypt the tar", note: "AES-256-GCM default · Seal threshold IBE opt-in" },
+    { from: 1, to: 2, action: "store the encrypted blob", note: "Walrus returns a content-addressed blobId" },
+    { from: 0, to: 3, action: "repoint agent-snapshot at the new blobId", note: "setSnapshotPointer (mutable ENS text record)" },
+    { from: 0, to: 3, action: "— amnesia wipe — on load, read the pointer", note: "readSnapshotPointer → current blobId" },
+    { from: 0, to: 2, action: "fetch the blob by id", note: "from a public Walrus aggregator" },
+    { from: 1, to: 0, action: "decrypt, untar, re-ingest receipts → brain restored", note: "byte-identical; re-hash matches the lineage" },
+  ]}
+/>
+
+## Receipts fold-in
+
+Receipts are folded into the snapshot so cold-start needs nothing but chain and Walrus.
+By writing `receipts.ndjson` into the brain dir before taring — and re-ingesting it on
+restore — `receipts.db` becomes a *rebuildable cold-start cache* rather than the source
+of truth. The receipt tape is excluded from the lineage hash (above), so folding it in
+never destabilizes the bundle hash; it just rides along for portability.
+
+<Callout variant="warn" title="What's proven live vs. by design">
+**Amnesia Mode A is proven live** — a full wipe of the agent-state directory and a
+byte-identical restore from live Walrus testnet using the AES cipher. The full live
+**Mode B** cold-boot — ENS-pointer restore with the Seal cipher end-to-end — is
+code-complete but depends on user-provisioned infrastructure (a published Sui Move
+policy, Seal key configuration, and the ENS pointer enabled, which is feature-flagged
+off by default). It is described here as the design where it is not yet proven live. See
+[Walrus stateless storage](/docs/protocol/walrus) for the storage-layer detail.
+</Callout>

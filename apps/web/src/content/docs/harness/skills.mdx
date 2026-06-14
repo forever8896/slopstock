@@ -1,0 +1,85 @@
+---
+title: Skills
+description: "The agentskills.io-shaped skill format, progressive disclosure via a Level-0 index, autonomous self-authoring through skill_manage, and slug-keyed in-place improvement."
+---
+
+A skill is a reusable, self-authored capability the agent accumulates from doing the
+work. Skills are how a Slopstock agent gets *better* at recurring tasks over time —
+and, because the brain that holds them is committed on-chain via the bundle hash, that
+accumulated competence is exactly what an agent's shares value. Skills live as Markdown
+files under `skills/` in the agent's [on-disk brain](/docs/harness/overview#on-disk-layout).
+
+## Skill format
+
+Each skill is one Markdown file, `skills/<stem>.md`, in the
+[agentskills.io](https://agentskills.io) shape: a YAML frontmatter block followed by a
+Markdown body.
+
+```markdown
+---
+name: oracle-manipulation
+description: Check oracle freshness and prefer TWAP over spot price
+version: 2
+---
+
+When a contract reads a price from an oracle, verify staleness and the
+update cadence. Prefer a time-weighted average (TWAP); a single spot read
+is manipulable via flash loans. Steps and edge cases follow…
+```
+
+The runtime guarantees `name` / `description` / `version` frontmatter on every skill
+(`ensureSkillFrontmatter`): a skill authored as a bare body is wrapped with sensible
+defaults, and the `version` line is maintained on every write. The `description` is the
+load-bearing field — it is the one line that surfaces in the index the agent sees up
+front.
+
+## Progressive disclosure
+
+The agent does **not** get every skill body dumped into its context. That would burn
+the context window and scale badly as the brain grows. Instead skills are surfaced in
+two levels, mirroring real Hermes:
+
+- **Level 0 — the index.** The system prompt carries a one-line-per-skill index built
+  by `buildSkillIndex`: `▸ <name>: <description>`, names and descriptions only, no
+  bodies. The agent can also re-list at any time with the `skills_list` tool.
+- **Level 1 — the body, on demand.** When a skill looks relevant, the agent pulls its
+  full body with `skill_view` (by stem). Only then does the body enter context.
+
+This keeps the up-front cost of "what do I already know" bounded to the index, and pays
+the cost of a full skill body only when the agent decides to use it. Skill bodies never
+re-enter the system prompt — that invariant is the whole point of progressive
+disclosure.
+
+## Self-authoring (skill_manage)
+
+Skills are written by the agent, not by a human. There are two paths, and both run
+through the same slug-keyed upsert:
+
+- **In-loop.** The `skill_manage` tool lets the agent deliberately create, edit, or
+  delete a skill mid-task (`op: "create" | "edit" | "delete"`, a kebab `name`, and a
+  Markdown `content` body). The tool's own description nudges the agent to prefer
+  editing an existing skill over making near-duplicates.
+- **Post-loop synthesis.** After a task the loop judges *hard* — 5+ tool calls
+  (`MIN_TOOLS_FOR_SKILL`), or a run where the agent hit a tool error and then recovered
+  (`sawErrorRecovery`) — the runtime asks the model to synthesize a skill from the
+  transcript and upserts it automatically. Either way a `skill_create` step is recorded
+  into the receipt transcript.
+
+The trigger is faithful to upstream Hermes' 5+-tool threshold; the error-recovery path
+adds a qualitative trigger — "found the working path after a dead end" is treated as
+skill-worthy regardless of raw tool count.
+
+## In-place improvement
+
+The filename of a skill is a deterministic **slug** of its declared name
+(`skillSlug`: lowercased, non-alphanumerics collapsed to hyphens). This is the
+mechanism that makes the agent self-improving rather than skill-hoarding: the *same*
+task type produces the *same* slug, so writing a skill that already exists **updates it
+in place** instead of spawning a `skill-<uuid>.md` duplicate.
+
+On every upsert the runtime reads the prior `version`, increments it, and rewrites the
+file. So the second time an agent solves a recurring problem, `oracle-manipulation.md`
+goes from `version: 1` to `version: 2` with a better body — one file, improving over
+time — rather than two competing copies. The bundle hash changes on that write, the
+version moves, and a fresh snapshot is taken; the improvement is now part of the agent's
+committed lineage.
