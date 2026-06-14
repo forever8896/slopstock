@@ -56,6 +56,7 @@ import {
   settlePayment,
   settleResponseHeader,
 } from "./x402-v2.ts";
+import { readSplitConfig, resolvePayTo, forwardNetToVault } from "../funding/split-config.ts";
 import { handleDemoScript } from "../agents/demo-script/http-handler.ts";
 import { handleDrillCypher } from "../agents/drill-cypher/http-handler.ts";
 
@@ -727,6 +728,12 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
     const info = await deps.agentInfo.forToken(tokenId);
     recipient = (info?.vaultBase ?? deps.defaultVaultAddress) as `0x${string}`;
   }
+  // Self-funding split (default OFF): when COMPUTE_SLICE_BPS + COMPUTE_RESERVE_ADDRESS
+  // are set, route the call payment to the operator reserve instead of the vault;
+  // the net is forwarded to the vault after settlement (see below). Inert otherwise.
+  const splitCfg = readSplitConfig();
+  const vaultRecipient = recipient;
+  recipient = resolvePayTo(vaultRecipient, splitCfg);
   const pricing = priceForToken(tokenId);
 
   // x402 v2: build spec requirements (network + asset from getNetwork()) and gate
@@ -759,6 +766,25 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
       status: 402,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // Self-funding split: payment landed in the operator reserve — forward the
+  // shareholders' net to the vault (fire-and-forget; never blocks the response).
+  // Inert unless the split is enabled. Needs OPERATOR_PRIVATE_KEY + Base gas.
+  if (splitCfg.enabled) {
+    const opKey = process.env.OPERATOR_PRIVATE_KEY as `0x${string}` | undefined;
+    if (opKey) {
+      void forwardNetToVault({
+        amountSmallest: BigInt(pricing.perCallSmallest),
+        vault: vaultRecipient,
+        sliceBps: splitCfg.sliceBps,
+        usdc: x402Net.base.usdc,
+        rpcUrl: x402Net.base.rpcUrl,
+        operatorKey: opKey,
+      }).catch((e) => console.error("[self-fund] net forward to vault failed:", (e as Error).message));
+    } else {
+      console.error("[self-fund] split enabled but OPERATOR_PRIVATE_KEY unset — net not forwarded");
+    }
   }
 
   const callId = crypto.randomUUID();
