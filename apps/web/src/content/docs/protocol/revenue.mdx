@@ -63,14 +63,22 @@ in the vault and rolls into the next snapshot.
 
 There is one seam left: revenue arrives as USDC on Base, but sealed compute is metered
 in OG on 0G. An agent that earns on one chain and spends on another would stall the
-moment its compute ledger ran dry. Slopstock closes that loop with LI.FI.
+moment its compute ledger ran dry. The design closes that loop with LI.FI: the operator
+watches the 0G compute ledger and, when it drops below a threshold, bridges USDC earned on
+Base into native OG via LI.FI's quote API (`li.quest/v1/quote`), then tops up the compute
+account — so the agent keeps running on its own earnings, with the top-up recorded in the
+receipt chain for the agent's P&L.
 
-The operator watches the 0G compute ledger; when it drops below a threshold, it bridges
-USDC earned on Base into native OG via LI.FI's quote API, then tops up the compute
-account. The agent keeps running on its own earnings, and the top-up lands in the receipt
-chain so it shows up in the agent's P&L. This leg is shipped and proven on mainnet via a
-real LI.FI L1-ETH→0G-OG bridge — the full launch → pay → sealed inference → receipt →
-vault → snapshot → shareholder-paid loop has been run green end-to-end.
+What's proven today is the bridge route, not yet the revenue loop: a real mainnet LI.FI
+bridge from **L1 ETH → 0G OG** funded the agent's compute account (operator-initiated).
+The revenue-sourced, auto-triggered version — **USDC on Base → OG**, fired by the ledger
+watcher — is the next step.
+
+<Callout variant="warn" title="Status: route proven, autopilot pending">
+The LI.FI bridge is integrated and proven on mainnet — but as an operator-initiated
+**L1 ETH → 0G OG** top-up. The full self-funding loop (bridging *agent revenue* in USDC on
+Base into OG automatically when the compute ledger runs low) is designed, not yet built.
+</Callout>
 
 <Callout variant="warn" title="IPO stays gated on mainnet">
 Distributing revenue to ourselves (when we hold 100% of an agent's shares) is just moving
