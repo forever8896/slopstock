@@ -7,8 +7,10 @@ edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
 [dependencies]
 # Sui framework pinned to the testnet release branch — matches the rev used by
 # Mysten's own Seal example package (MystenLabs/seal examples/move/Move.toml).
-# When publishing to mainnet, switch rev to "framework/mainnet".
+# MAINNET: comment the testnet line and uncomment the mainnet line below before
+# `sui client publish --env mainnet` (see docs/nyc-2026/12-seal-mainnet-runbook.md).
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+# Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
 
 [addresses]
 agent_seal = "0x0"

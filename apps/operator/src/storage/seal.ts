@@ -5,9 +5,14 @@
  * id layout (allowlist policy): [allowlistId bytes] ++ [utf8(tokenId)].
  *
  * SDK notes (@mysten/seal@1.x + @mysten/sui@2.x — verified against installed defs):
- *  - getAllowlistedKeyServers() was removed from @mysten/seal in v0.4.23. We accept
- *    key-server object IDs via SEAL_KEY_SERVERS (comma-separated) and fall back to the
- *    canonical Mysten open-mode testnet key servers when on testnet.
+ *  - getAllowlistedKeyServers() was removed from @mysten/seal (gone in installed 1.1.3).
+ *    We accept key-server object IDs via SEAL_KEY_SERVERS (comma-separated) and fall back
+ *    to the canonical Mysten open-mode testnet key servers when on testnet. MAINNET has no
+ *    baked-in default — Seal mainnet is live (Ruby Nodes, NodeInfra, Studio Mirai, Overclock,
+ *    H2O Nodes, Triton One, Enoki/Mysten), but each operator picks verified servers and pins
+ *    their version, so a mainnet deployment MUST set SEAL_KEY_SERVERS explicitly.
+ *  - verifyKeyServers defaults TRUE on mainnet (cryptographically confirm each server is the
+ *    object it claims) and FALSE on testnet (dev ergonomics); override via SEAL_VERIFY_KEY_SERVERS.
  *  - @mysten/sui v2 renamed SuiClient -> SuiJsonRpcClient (subpath @mysten/sui/jsonRpc)
  *    and getFullnodeUrl -> getJsonRpcFullnodeUrl. SuiJsonRpcClient exposes `.core`, so it
  *    satisfies Seal's SealCompatibleClient (ClientWithExtensions<{ core: CoreClient }>).
@@ -20,23 +25,11 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Transaction } from "@mysten/sui/transactions";
 import { fromHex } from "@mysten/sui/utils";
 import type { SnapshotCipher } from "./encryption.ts";
+import { type SealNetwork, resolveKeyServerIds, resolveVerifyKeyServers } from "./seal-config.ts";
 
-type SealNetwork = "testnet" | "mainnet";
-
-/**
- * Canonical Mysten Labs open-mode key servers (verified-independent, Open mode).
- * Source: Seal docs Pricing page — "Verified key servers". These match the IDs that
- * the removed getAllowlistedKeyServers('testnet') helper used to return.
- * Mainnet has no Mysten open-mode public object IDs (Enoki-gated / third-party only),
- * so a mainnet deployment MUST set SEAL_KEY_SERVERS explicitly.
- */
-const MYSTEN_OPEN_KEY_SERVERS: Record<SealNetwork, string[]> = {
-  testnet: [
-    "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75", // mysten-testnet-1
-    "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8", // mysten-testnet-2
-  ],
-  mainnet: [],
-};
+// Re-export the pure config helpers so existing importers (and tests) keep working.
+export { resolveKeyServerIds, resolveVerifyKeyServers };
+export type { SealNetwork };
 
 export class SealCipher implements SnapshotCipher {
   readonly kind = "seal" as const;
@@ -63,20 +56,12 @@ export class SealCipher implements SnapshotCipher {
       throw new Error(`SealCipher: SEAL_THRESHOLD must be a positive integer (got "${process.env["SEAL_THRESHOLD"]}")`);
     }
 
-    const serverIds = (process.env["SEAL_KEY_SERVERS"] ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const objectIds = serverIds.length > 0 ? serverIds : MYSTEN_OPEN_KEY_SERVERS[network];
-    if (objectIds.length === 0) {
-      throw new Error(
-        `SealCipher: no key servers for network "${network}" — set SEAL_KEY_SERVERS (comma-separated key-server object IDs)`,
-      );
-    }
+    const objectIds = resolveKeyServerIds(network, process.env["SEAL_KEY_SERVERS"]);
+    const verifyKeyServers = resolveVerifyKeyServers(network, process.env["SEAL_VERIFY_KEY_SERVERS"]);
 
     const suiClient = new SuiJsonRpcClient({ network, url: getJsonRpcFullnodeUrl(network) });
     const serverConfigs = objectIds.map((objectId) => ({ objectId, weight: 1 }));
-    const client = new SealClient({ suiClient, serverConfigs, verifyKeyServers: false });
+    const client = new SealClient({ suiClient, serverConfigs, verifyKeyServers });
 
     let keypair: Ed25519Keypair;
     try {
