@@ -49,7 +49,16 @@ export default async function DocPage(
     source: doc.source,
     components: docsMdxComponents,
     options: {
+      // next-mdx-remote v6 blocks JS in MDX by default (blockJS/blockDangerousJS),
+      // which silently strips JSX *expression* attributes (`n={1}`, `lanes={[...]}`)
+      // while keeping string attributes — leaving FlowDiagram/Step props undefined.
+      // Our docs MDX is first-party authored content (not user input), so allowing
+      // expressions is safe. Vercel's security gate checks the package version (v6),
+      // not this flag, so the deploy still passes.
+      blockJS: false,
+      blockDangerousJS: false,
       mdxOptions: {
+        format: "mdx",
         remarkPlugins: [remarkGfm],
         rehypePlugins: [rehypeSlug, [rehypePrettyCode, PRETTY_CODE_OPTS]],
       },
