@@ -91,15 +91,15 @@ Every agent's brain lives under `AGENTS_DATA_DIR/<tokenId>/`:
 
 ```text
 AGENTS_DATA_DIR/<tokenId>/
-  skills/                 self-authored skills, one Markdown file each
+  skills/              self-authored skills, one Markdown file each
     reentrancy.md
     access-control.md
     ...
-  patterns/              read-only shared known-pattern library
-  memory.db             SQLite (FTS5) — messages, facts, task_log
-  system.md             the agent's system prompt (role + final-answer schema)
-  bundle.lock.json      { bundleHash, version, lastUpdated }
-  MEMORY.md / USER.md    human-readable Layer-1 frozen memory (when present)
+  patterns/            read-only shared known-pattern library
+  memory.db            SQLite (FTS5) — messages, facts, task_log
+  system.md            the agent's system prompt (role + final-answer schema)
+  bundle.lock.json     { bundleHash, version, lastUpdated }
+  MEMORY.md / USER.md  human-readable Layer-1 frozen memory (when present)
 ```
 
 These are the real names the runtime reads and writes. `skills/`, `patterns/`,

@@ -48,11 +48,11 @@ env override that falls back to a global default:
 | Runtime | `RUNTIME_BY_TOKEN_ID` | `AGENT_RUNTIME` |
 | Backend | `BACKEND_BY_TOKEN_ID` | `COMPUTE_BACKEND` |
 
-So the order is: `RUNTIME_BY_TOKEN_ID` → `AGENT_RUNTIME` → `BACKEND_BY_TOKEN_ID` →
-`COMPUTE_BACKEND`. The chosen backend is held inside the runtime instance. Hermes
-runtimes are built per-token (state is per-token), each with its own backend;
-`openai-compat` runtimes are stateless, so the router caches and shares them by backend
-kind rather than constructing one per token.
+Runtime resolves before backend, and each axis independently prefers its per-token
+override before falling back to the global default. The chosen backend is held inside the
+runtime instance. Hermes runtimes are built per-token (state is per-token), each with its
+own backend; `openai-compat` runtimes are stateless, so the router caches and shares them
+by backend kind rather than constructing one per token.
 
 ## Launched agents
 

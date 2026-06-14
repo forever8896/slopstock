@@ -14,7 +14,7 @@ const BACKENDS = [
   { key: "openai-compat", label: "openai-compat", blurb: "any OpenAI-shaped HTTP endpoint" },
 ];
 const CELLS: Record<string, string> = {
-  "hermes|0g-compute": "Full harness on sealed inference — the production path for launched agents (deepseek-v4 on 0G mainnet).",
+  "hermes|0g-compute": "Full harness on sealed inference — the production path for launched agents (deepseek-v4-flash on 0G mainnet).",
   "hermes|openai-compat": "Full harness on a plain endpoint — local/dev (Ollama, OpenRouter). Stateful, unsealed.",
   "openai-compat|0g-compute": "One sealed call, no state — cheap attested inference without the agent loop.",
   "openai-compat|openai-compat": "One plain call — the simplest baseline.",
