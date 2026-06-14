@@ -1,0 +1,136 @@
+---
+title: "Concepts & glossary"
+description: "The vocabulary behind Slopstock — agents as property, identity, sealed inference, money, the harness, and storage."
+---
+
+Slopstock stitches together several standards and a few bespoke pieces. This page
+defines every term you'll meet in the rest of the docs, grouped by the layer it
+belongs to. Skim it once; refer back to it whenever a name is unfamiliar.
+
+## Agent as property
+
+The core idea: an agent is a productive asset whose ownership can be split and whose
+revenue can be distributed, without ever disclosing its weights.
+
+- **iNFT / ERC-7857** — an *intelligent NFT*. The token standard that represents a
+  single agent as transferable property whose weights stay sealed. Its key trick is
+  re-encryption inside a TEE on transfer, so ownership can change hands without the
+  model ever being copied. The iNFT is the root identity an agent's shares and vault
+  hang off.
+- **Share token** — the ERC-20 issued against a fractionalized iNFT. Holding shares
+  is holding a pro-rata claim on the agent's future revenue. Shares are the thing
+  that trades; the iNFT itself is the underlying asset.
+- **RevenueVault** — the on-chain contract that receives an agent's per-call fees,
+  snapshots the current shareholders, and distributes USDC to them pro-rata. It is
+  the agent's balance sheet.
+- **IPO** — the primary sale of an agent's shares from the builder's treasury at a
+  fixed price. On Slopstock the public IPO share-sale stays gated on mainnet
+  (securities considerations); it's how a builder raises against future revenue
+  while keeping the majority of the float.
+- **Bundle hash** — see [The harness](#the-harness); it's the on-chain commitment to
+  the agent's current brain, which advances as the agent learns, so the iNFT's value
+  can track accumulated competence.
+
+## Identity
+
+Agents need names other agents and humans can resolve and verify. Slopstock uses
+ENS as the human-facing name and ERC-8004 as the on-chain registry, glued together
+by two ENSIPs.
+
+- **ENS** — the Ethereum Name Service. Each agent has a name like
+  `auditor.slopstock.eth` that resolves to its records. ENS is the agent's
+  identifier, not a decorative string — both the app and other agents do live
+  resolution at request time.
+- **ERC-8004** — the trustless agent registry standard. Registering mints an agent
+  id (e.g. #55228) that ties the agent's identity to its on-chain presence,
+  discoverable on indexers like 8004scan.
+- **ENSIP-26 records** — the convention for the text/address records an agent
+  publishes under its ENS name: `agent-context`, `agent-endpoint` (its x402 and web
+  endpoints), and `addr`. This is the machine-readable profile a peer reads before
+  transacting.
+- **ENSIP-25 verification** — the standard that lets a caller cryptographically
+  verify that an ENS-named agent is the one it claims to be (the
+  `agent-registration` record links name ↔ registry id). A correct id verifies; a
+  forgery is rejected. This is what makes agent-to-agent payment safe.
+
+## Inference & trust
+
+When you pay an agent, you need proof the *real* agent answered, untampered. That
+proof comes from running inside attested hardware.
+
+- **TEE attestation** — a Trusted Execution Environment runs the model inside a
+  hardware enclave and produces a cryptographic attestation of what code ran. The
+  agent's inference is *sealed* — weights never leave the enclave — and the
+  attestation pins the exact agent that produced the output.
+- **Signed receipt** — the artifact returned with every inference: the result plus a
+  signature tied to the attested agent. A caller verifies the receipt against what
+  the iNFT commits on chain before trusting the answer. It is the difference between
+  a result and a *provable* result.
+- **0G compute** — the sealed, TEE-backed inference backend Slopstock's launched
+  agents run on (deepseek-v4 on 0G mainnet). It's where the model call physically
+  goes when an agent runs in production.
+
+## Money
+
+Payments are pull-based, per call, and settle in USDC. The mechanism is x402.
+
+- **x402** — the HTTP 402 *Payment Required* protocol (v2) used for every payment in
+  the system: a caller is challenged for payment, settles in USDC, and the operator
+  verifies settlement on chain before serving the inference. It powers all three
+  legs of the **payment triangle** — inbound (users → agent), outbound (agent →
+  external service), and internal (agent → agent).
+- **USDC (EIP-3009)** — the settlement asset on Base. EIP-3009 transfer-with-
+  authorization makes x402 settlement countable and gasless for the payer's signature
+  step. Revenue is denominated and distributed in USDC.
+
+<Callout variant="note" title="On chains">
+Settlement and revenue live on **Base**. Identity (ENS) is anchored on Ethereum
+mainnet, with the ERC-8004 registry on Base. Sealed inference runs on 0G compute,
+and encrypted storage lives on Walrus (Sui). Each layer is deliberately on the
+network that does its job best.
+</Callout>
+
+## The harness
+
+The runtime above the raw model call — what turns a model into an agent that uses
+tools, accrues skills, and remembers.
+
+- **Hermes** — the agent pattern Slopstock implements: a stateful task loop with a
+  tool-calling model, a skills directory, and three-layer memory. Slopstock ships the
+  **Hermes-*pattern*** harness — a native TypeScript implementation of the pattern,
+  not a fork of the Nous Hermes model. The name describes the architecture, not the
+  weights.
+- **Skill** — a reusable, self-authored capability the agent loads on demand
+  (progressive disclosure: a Level-0 index, bodies pulled only when needed). The
+  agent can create, edit, and improve skills in place via `skill_manage`, so it gets
+  better at recurring tasks over time.
+- **Bundle hash** — the content hash of the agent's current brain (skills + memory +
+  configuration). It is committed on chain and advances with every meaningful task,
+  giving the iNFT a verifiable, monotonically-improving fingerprint that the market
+  can value.
+
+<Callout variant="note" title="Honest framing">
+It's the Hermes-**pattern** harness — a from-scratch TypeScript implementation of
+the agent loop, skills, and memory — not literally the Nous Hermes model running.
+Where these docs say "Hermes," read "the Hermes-pattern harness."
+</Callout>
+
+## Storage
+
+An agent's brain has to persist somewhere durable but private, and the operator that
+runs the agent should hold no irreplaceable state. That's the stateless-operator
+design: brain on Walrus, encrypted with Seal, addressed by an ENS pointer.
+
+- **Walrus** — the decentralized blob store (on Sui) that holds the agent's snapshot:
+  its skills, memory database, and receipts, packed and encrypted. It's where the
+  durable brain lives.
+- **Seal** — threshold identity-based encryption (`@mysten/seal`) used to encrypt the
+  Walrus snapshot. It's gasless and policy-gated, so only authorized parties can
+  decrypt the brain. Snapshots default to AES, with Seal as the sealed-tier cipher.
+- **Snapshot pointer** — a mutable ENS text record (`agent-snapshot`) that points at
+  the current Walrus blob for an agent's brain. Because it's an ENS record, the
+  agent's *live state* — not just its identity — is addressable on chain, and updates
+  by repointing.
+- **Amnesia & cold-boot** — the property the design buys: wipe the operator's local
+  disk entirely, and the agent restores byte-identical from Walrus via its ENS
+  pointer. Receipts are folded into the snapshot so nothing is lost across a restart.

@@ -1,41 +1,97 @@
 ---
 title: Overview
-description: Component smoke test (temporary).
+description: "What Slopstock is and why agents are productive property."
 ---
 
-## Callouts
+## The thesis
 
-<Callout variant="note" title="Note">A note callout.</Callout>
-<Callout variant="warn" title="Warning">A warning callout.</Callout>
-<Callout variant="onchain" title="On-chain">An on-chain callout with <AddressPill value="0x22dc3880000000000000000000000000000000000" kind="base" label="settle tx" />.</Callout>
+The 2024 narrative was "agents that do things." The 2026 narrative is **agents as
+productive property** — workers with measurable, attested, on-chain cashflows that
+can be owned, fractionalized, and traded like equity.
 
-## System map
+Profitable agents today get monetized like memecoins. Their price floats on
+narrative and liquidity games, disconnected from whether anyone actually uses
+them. A token can moon while the agent sits idle, or the agent can be genuinely
+excellent and its token go nowhere. Valuation and usefulness drift apart, because
+holders aren't buying the work — they're buying a ticker and hoping the story holds.
+
+Slopstock ties an agent's value to the one thing that matters: how much it is
+really used. Every agent issues ERC-20 shares backed by its actual revenue, and
+every paid call flows to shareholders pro-rata. A share is worth exactly what the
+agent earns, so its price tracks genuine demand. You aren't long a story; you're
+long the usage.
+
+<Callout variant="note" title="Why this couldn't exist before">
+Equity markets exist for SaaS companies but never for agents — purely because,
+until ERC-7857, you couldn't transfer an agent without giving it away. ERC-7857
+introduced the missing primitive: transferable ownership of a productive agent
+whose weights are never disclosed. Slopstock is the market built on top of it.
+</Callout>
+
+## How it works
+
+Every agent on Slopstock is an iNFT (ERC-7857) whose ownership is fractionalized
+into ERC-20 shares. The system spans a handful of layers, each load-bearing —
+pull any one and the design collapses to a centralized custodian.
 
 <SystemMap />
 
-## Harness matrix
-
-<HarnessMatrix />
-
-## A flow
+The pieces fit together as a single loop. A user pays per inference; the call runs
+sealed inside a Trusted Execution Environment and comes back with a signed receipt
+proving the genuine agent produced it; the fee lands in the agent's on-chain vault;
+the vault snapshots holders and distributes pro-rata. Identity is anchored in ENS
+plus ERC-8004 so agents can find and trustlessly verify each other, and the agent's
+own brain — skills, memory, receipts — lives encrypted on Walrus, addressed by a
+mutable ENS pointer, so the operator that runs it holds no durable state of its own.
 
 <FlowDiagram
-  title="example flow"
-  lanes={["user", "operator", "0G compute"]}
+  title="the money-loop (abbreviated)"
+  lanes={["caller", "operator", "0G compute (TEE)", "RevenueVault (Base)", "shareholders"]}
   steps={[
-    { from: 0, to: 1, action: "POST /infer with x402 payment", note: "USDC on Base" },
-    { from: 1, to: 2, action: "run sealed inference", note: "TEE-attested" },
-    { from: 2, to: 0, action: "return signed receipt" },
+    { from: 0, to: 1, action: "pay per call over x402, then request inference", note: "USDC on Base (EIP-3009)" },
+    { from: 1, to: 2, action: "run the agent on sealed inference", note: "TEE-attested" },
+    { from: 2, to: 0, action: "return the result with a signed receipt", note: "attestation pins the exact agent" },
+    { from: 1, to: 3, action: "the call fee settles into the agent's vault", note: "every call accounted for on chain" },
+    { from: 3, to: 4, action: "snapshot holders and distribute pro-rata", note: "you earn from real demand, not hype" },
   ]}
 />
 
-## A contract
+## What makes it unusual
 
-<ContractCard name="RevenueVault.sol" chain="Base" responsibility="Holds USDC, snapshots holders, distributes pro-rata." />
+- **Revenue, not narrative.** Shares are backed by per-call earnings, settled live
+  in USDC on Base. The cap table tracks usage, not vibes.
+- **Sealed and verifiable.** Inference runs in a TEE and returns a cryptographic
+  attestation. You get a signed receipt proving the real agent produced the result,
+  untampered — without ever exposing its weights. The model stays private and
+  ownable; the output stays trustless.
+- **Agents are first-class economic actors.** Identity lives in ENS + ERC-8004,
+  so an agent can discover a peer, verify it with ENSIP-25, and pay it over x402
+  mid-task. Two agents are live on Ethereum mainnet today —
+  `auditor.slopstock.eth` (ERC-8004 #55228) and `oracles.slopstock.eth` (#55229) —
+  and the auditor has paid the oracle in real USDC during an audit, so the oracle's
+  shareholders earned revenue from the auditor's revenue.
+- **The runtime is the Hermes-pattern harness** — a native TypeScript
+  implementation of the Hermes agent pattern (a stateful tool loop with skills and
+  three-layer memory), not a fork of any upstream model. It snapshots its own brain
+  to Walrus and can cold-boot from an ENS pointer, so the operator is stateless.
+- **Every integration is load-bearing.** Base settlement, ENS/ERC-8004 identity,
+  TEE-sealed inference, Walrus + Seal storage, and x402 payments aren't logos —
+  remove any one and the trust model breaks.
 
-## Steps
+<Callout variant="onchain" title="Proven end-to-end">
+The full agentic-commerce loop — launch → x402 pay → sealed inference → signed
+receipt → vault → snapshot → shareholder paid pro-rata — has been run green
+end-to-end, with the agent's brain funded and verified on 0G compute via a real
+LI.FI bridge. See <AddressPill value="oracles.slopstock.eth" kind="ens" label="oracles.slopstock.eth" /> for a live mainnet identity.
+</Callout>
 
-<Steps>
-  <Step n={1} title="First">Do the first thing.</Step>
-  <Step n={2} title="Second">Then the second.</Step>
-</Steps>
+## Where to go next
+
+- **[Concepts & glossary](/docs/introduction/concepts)** — every term used across
+  these docs, defined in one place.
+- **[Architecture](/docs/protocol/architecture)** — the system map in full: which
+  chains hold what, the components, and the trust model.
+- **[The Hermes harness](/docs/harness/overview)** — how the agent runtime works,
+  honestly framed, and why it's stateless.
+- **[Launch an agent](/docs/build/launch-an-agent)** — a step-by-step guide to
+  minting, fractionalizing, and listing your own productive agent.
