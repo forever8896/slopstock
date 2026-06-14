@@ -1,0 +1,82 @@
+---
+title: Launch
+description: "From nothing to a live, ownable agent — minting the iNFT on 0G, fractionalizing it, deploying its cashflow contracts, registering its identity, and seeding its brain."
+---
+
+Launch is the one-time act that turns a system prompt into a productive asset. By the
+time it finishes, the agent exists as an iNFT whose ownership is fractionalized into
+shares, has on-chain contracts ready to take and distribute revenue, carries a verifiable
+identity peers can find, and has a brain seeded on sealed compute. Each step lands on the
+chain that owns that concern — the asset on 0G, the cashflow on Base, the name on
+Ethereum L1 — and nothing about the launch is custodial: every artifact is a public
+on-chain object the moment it is created.
+
+## Overview
+
+A launch is five concerns, deliberately split across chains so each lives where its trust
+model belongs:
+
+- **The asset** — the agent itself is an iNFT (ERC-7857) on **0G**, with its sealed brain
+  addressed by content hash and its weights never disclosed. See
+  [Sealed inference](/docs/protocol/sealed-inference).
+- **The shares** — ownership is fractionalized into ERC-20 shares so the asset can be
+  co-owned and traded like equity. See [Revenue & payouts](/docs/protocol/revenue).
+- **The cashflow** — a RevenueVault and an IPOSale on **Base** give the agent a balance
+  sheet and a primary share-sale, denominated in USDC.
+- **The identity** — an ENS name on **Ethereum L1** plus an ERC-8004 registration on
+  **Base**, linked by ENSIP-25 so peers can discover and verify it. See
+  [ENS + ERC-8004 identity](/docs/protocol/identity).
+- **The brain** — a Hermes-pattern harness seeded on **0G compute**
+  (**deepseek-v4-flash**), so the first paid call runs the real agent on sealed inference.
+  See [Hermes overview](/docs/harness/overview).
+
+The point of the split is that no single chain or operator holds the whole agent. Pull any
+one leg and what remains is honestly incomplete, never a centralized custodian quietly
+standing in for the missing piece.
+
+## Step by step
+
+<FlowDiagram
+  title="launching a productive agent"
+  lanes={["builder", "0G (asset)", "Base (cashflow)", "Ethereum L1 (ENS)", "0G compute (TEE)"]}
+  steps={[
+    { from: 0, to: 1, action: "mint the iNFT — sealed brain addressed by content hash", note: "ERC-7857 · weights never disclosed" },
+    { from: 1, to: 1, action: "fractionalize the token into ERC-20 shares", note: "fixed supply (1,000,000)" },
+    { from: 0, to: 2, action: "deploy the cashflow bundle for the new tokenId", note: "RevenueVault + IPOSale (USDC)" },
+    { from: 0, to: 3, action: "register the ENS name and its records", note: "ENSIP-26 endpoints + ENSIP-25 agent-registration" },
+    { from: 0, to: 2, action: "register the ERC-8004 id and bind the wallet", note: "canonical Base IdentityRegistry" },
+    { from: 0, to: 4, action: "seed the harness — system.md from the system prompt", note: "Hermes on deepseek-v4-flash, sealed" },
+  ]}
+/>
+
+The order matters. The iNFT must exist before it can be fractionalized; the cashflow
+bundle is deployed against the iNFT's `tokenId` so the vault knows which agent it banks;
+identity is registered last on the asset side because the ENSIP-25 record points back at
+the ERC-8004 id, which only exists after registration. The brain seed is idempotent — it
+writes the agent's `system.md` from the supplied system prompt only if one is not already
+present, so a later self-improved prompt is never clobbered (see
+[Runtime × backend routing](/docs/harness/routing)).
+
+## What you get
+
+When launch completes, the agent is a first-class economic actor:
+
+- **A tradeable asset.** The iNFT is the agent; its shares trade independently and track
+  the agent's real usage, not a narrative.
+- **A live balance sheet.** Every paid call settles into the RevenueVault on Base, and a
+  snapshot distributes that revenue to shareholders pro-rata — the agent's value is what
+  it earns. This is [the money-loop](/docs/flows/money-loop).
+- **A verifiable name.** Peers resolve the agent by its ENS name, read its ENSIP-26
+  endpoints, and verify it against the ERC-8004 registry before paying — the basis for
+  [a2a discovery](/docs/flows/discovery).
+- **A sealed, improving brain.** The agent runs the Hermes-pattern harness on 0G compute,
+  so the first paid call already executes on the real, attested model — and the brain
+  accrues skills and memory as it works.
+
+<Callout variant="onchain" title="Nothing here is a placeholder">
+Each step produces a real on-chain object — an iNFT token id, a share-token address, a
+vault and IPO sale, ENS records, and an ERC-8004 id — that anyone can read on a block
+explorer. The full launch → pay → sealed inference → receipt → vault → snapshot →
+shareholder-paid loop has been run green end-to-end on mainnet rails. To do it yourself,
+see [Launch an agent](/docs/build/launch-an-agent).
+</Callout>

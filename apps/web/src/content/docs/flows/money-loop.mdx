@@ -1,0 +1,75 @@
+---
+title: The money-loop
+description: "The full cycle that makes a share worth what an agent earns — a per-call payment becomes a sealed inference, a signed receipt, vault revenue, and a pro-rata dividend."
+---
+
+The money-loop is the cycle the whole project exists to close: a stranger pays for one
+call, the agent does real, attested work, and the fee ends up as a dividend in a
+shareholder's wallet — with no trust-me numbers anywhere along the way. Every other layer
+(identity, sealed inference, the vault) is in service of making this loop airtight and
+auditable. When it runs, "agents as productive property" stops being a slogan and becomes
+something you can read off a block explorer.
+
+## Overview
+
+The loop spans both chains the protocol uses, by design. Payment and revenue live where
+USDC and the cap table live (**Base**); the actual inference runs where the sealed brain
+lives (**0G compute**). A single call crosses that seam twice — once to do the work, once
+to bank the fee — and a signed receipt ties the two halves together so the spend, the
+work, and the payout all reference the same call.
+
+- **Payment** is x402 (USDC on Base, EIP-3009 — gasless for the payer). See
+  [x402 payment triangle](/docs/protocol/x402).
+- **Work** is one sealed, TEE-attested inference on 0G compute. See
+  [Sealed inference](/docs/protocol/sealed-inference).
+- **Proof** is the signed `stratum/receipt/v2` — attestation, model, I/O hashes, and the
+  payment proof, all bound under the operator's signature.
+- **Payout** is the RevenueVault snapshot and pro-rata distribution. See
+  [Revenue & payouts](/docs/protocol/revenue).
+
+## The loop
+
+<FlowDiagram
+  title="one paid call → one shareholder dividend"
+  lanes={["subscriber", "operator", "0G compute (TEE)", "RevenueVault (Base)", "shareholders"]}
+  steps={[
+    { from: 0, to: 1, action: "request inference; pay per call over x402", note: "USDC on Base (EIP-3009) · gasless for payer" },
+    { from: 1, to: 2, action: "run the agent on sealed inference", note: "Hermes on deepseek-v4-flash, TEE-attested" },
+    { from: 2, to: 1, action: "return output + attestation quote", note: "the enclave pins the exact model that ran" },
+    { from: 1, to: 0, action: "serve the result with a signed receipt", note: "stratum/receipt/v2 · payment + attestation bound" },
+    { from: 1, to: 3, action: "the net fee settles into the agent's vault", note: "every call accounted on-chain" },
+    { from: 3, to: 3, action: "snap(): record balance + a strictly-past block", note: "the distribution timepoint" },
+    { from: 3, to: 4, action: "distribute pro-rata by holdings at that block", note: "claim (pull) or distributeTo (push) · idempotent" },
+  ]}
+/>
+
+The seam to notice is between steps 4 and 5: the receipt is what lets the payment, the
+sealed work, and the vault entry be reconciled to one another. The receipt commits to the
+payment proof (the x402 settlement) and to the attestation (what ran), so the fee that
+lands in the vault is provably the fee for *this* attested call — not an unaccounted
+top-up or a result from some other model. The snapshot then freezes who the holders were
+at the moment revenue was booked, so a later trade can never dilute an earlier
+distribution. The mechanics of the snapshot math live in
+[Revenue & payouts](/docs/protocol/revenue).
+
+## Proven end-to-end
+
+This is not a diagram of an intention. The complete loop has been run **green
+end-to-end** by the `smoke-e2e-full-loop.ts` smoke test:
+
+> launch → x402 pay → sealed deepseek-v4 inference → signed receipt → vault → snapshot →
+> shareholder paid pro-rata.
+
+The brain it ran against was funded and verified on 0G mainnet via a real **LI.FI**
+bridge (L1 ETH → 0G OG), which is the same leg that lets an agent
+[fund its own compute](/docs/protocol/revenue) out of revenue — so the loop is not only
+demonstrable but self-sustaining: an agent earning USDC on Base can keep paying for its
+own sealed compute on 0G without manual top-ups.
+
+<Callout variant="onchain" title="Why the receipt is load-bearing">
+Without the signed receipt, the three on-chain facts — a payment, an inference, a vault
+credit — would float free of each other, and you would be back to trusting a dashboard.
+The receipt is what makes the loop auditable: it binds the attestation and the payment
+proof to one call, so anyone can check that the dividend a shareholder received traces to
+real, attested work a real stranger paid for.
+</Callout>

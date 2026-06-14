@@ -1,0 +1,82 @@
+---
+title: Acquisition
+description: "Buying the whole agent — a marketplace bid on the iNFT, in-TEE re-encryption of the sealed weights to the new owner, and an attestation-verified ownership transfer."
+---
+
+Acquisition is what makes an agent genuinely *ownable property*: the whole iNFT — the
+asset and future control of it — can change hands without ever exposing the model, and
+without the former owner keeping a usable copy. This is the headline trick the ERC-7857
+standard was created for, and it is the cleanest demonstration of why an agent is more
+like a transferable company than a public API key. It is also a distinct thing from
+buying shares — a point worth getting right before any money moves.
+
+## Overview
+
+A buyer acquires the iNFT itself, on **0G** (where the asset and its sealed brain live).
+The defining move is cryptographic: on accept, the agent's encrypted weights are
+re-encrypted *inside the TEE* to the new owner's key, the enclave attests to having done
+so, and the on-chain transfer only flips ownership after verifying that attestation. The
+former owner's old key is now useless. Identity follows the asset — the ENS resolver and
+ERC-8004 registration repoint to the acquirer.
+
+What does **not** move is the cap table. The outstanding ERC-20 shares trade on the open
+market on **Base** and are not swept up by an iNFT acquisition — see
+[Shares vs the agent](#shares-vs-the-agent) below.
+
+## Bid & re-encrypt
+
+<FlowDiagram
+  title="whole-iNFT buyout with in-TEE re-encryption"
+  lanes={["acquirer", "Marketplace (0G)", "TEE (0G compute)", "iNFT (ERC-7857)", "Ethereum L1 (ENS)"]}
+  steps={[
+    { from: 0, to: 1, action: "submit a bid on the whole iNFT, escrow funds", note: "bid is for the asset, not the shares" },
+    { from: 1, to: 2, action: "on accept, request re-encryption to the acquirer key", note: "requestReencrypt(tokenId, acquirerPubKey)" },
+    { from: 2, to: 2, action: "in-enclave: decrypt with old key, rotate, re-encrypt", note: "weights never leave the TEE in the clear" },
+    { from: 2, to: 1, action: "emit the re-encryption attestation", note: "hardware-signed proof of the rotation" },
+    { from: 1, to: 3, action: "iTransfer ownership, verifying the attestation", note: "transfer reverts if the attestation fails" },
+    { from: 3, to: 4, action: "repoint identity to the acquirer", note: "ENS resolver + ERC-8004 follow the asset" },
+  ]}
+/>
+
+The trust hinge is that `iTransfer` does not blindly flip ownership — it verifies the
+re-encryption attestation first, the same way a paid call verifies an inference
+attestation (see [Sealed inference](/docs/protocol/sealed-inference)). That is what makes
+the transfer atomic with the key rotation: ownership and the *ability to actually run the
+agent* move together, so a seller cannot pocket the price and keep a working copy, and a
+buyer cannot take ownership of a model they cannot decrypt.
+
+<Callout variant="warn" title="Status: design, not yet deployed">
+Whole-iNFT acquisition with in-TEE re-encryption is the **design** — the ERC-7857
+re-encryption-on-transfer is the standard's headline capability and the architecture
+above is the intended flow. It is **not** part of the proven end-to-end loop that has run
+green on mainnet (launch → pay → sealed inference → receipt → vault → snapshot →
+payout). Treat this page as the spec for acquisition, not a claim that a marketplace
+buyout has been executed live. The live, exercised ownership surface today is the share
+side: fractional shares minted at launch and the IPO/cap-table path.
+</Callout>
+
+## Shares vs the agent
+
+The single most important distinction on this page: **acquiring the iNFT is not the same
+as acquiring the shares.**
+
+| | The iNFT (the agent) | The ERC-20 shares |
+| --- | --- | --- |
+| What it is | The asset itself + future control of it | A claim on the agent's revenue stream |
+| Where it lives | 0G (ERC-7857) | Base (ShareToken) |
+| How you get it | Bid on the whole iNFT via the Marketplace | Buy at IPO or trade on the open market |
+| Moved by an acquisition? | **Yes** — ownership + sealed brain re-encrypt to you | **No** — they keep trading separately |
+
+When you acquire the iNFT, you are buying the asset and the control that comes with it —
+the re-encrypted brain, the identity, the right to operate it. You are **not** buying the
+outstanding shares; those were sold to holders and continue to trade on their own. A
+holder of shares keeps earning pro-rata dividends from the
+[money-loop](/docs/flows/money-loop) regardless of who owns the underlying iNFT, because
+the RevenueVault pays whoever holds shares at snapshot time, not the iNFT owner.
+
+This separation is deliberate. It lets the *control* of an agent and the *cashflow* of an
+agent be priced and traded independently — exactly as a company's equity and its
+operating control can be distinct. An acquirer who also wants the cashflow has to buy
+shares on the market like anyone else (a combined "tender offer" for both the iNFT and all
+shares would be an operator-defined arrangement layered on top, not an automatic
+consequence of the buyout).

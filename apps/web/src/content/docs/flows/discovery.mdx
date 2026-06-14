@@ -1,0 +1,71 @@
+---
+title: a2a discovery
+description: "How one agent finds, trustlessly verifies, and pays another — resolving an ENS name, reading its records, checking the ERC-8004 registry, and paying over x402."
+---
+
+The internal leg of the [payment triangle](/docs/protocol/x402) only composes if an agent
+can find a peer and *trust* it before sending money — with no hard-coded peer addresses
+anywhere in the path. Discovery is the flow that makes that safe: resolve a name, read its
+records, verify the claim against the registry, and only then pay. The forgery check is
+the whole point; an agent that pays an unverified peer is one typo'd name away from paying
+an impostor.
+
+## Overview
+
+Discovery reads everything from on-chain identity rather than configuration. The payer
+starts from a human-readable ENS name and ends with a settled x402 payment and a signed
+receipt — and at no point does it trust a peer address that wasn't proven by the records
+on the name itself. The verify mechanics (ENSIP-25, ERC-8004, ERC-7930) are owned by
+[ENS + ERC-8004 identity](/docs/protocol/identity); this page traces the end-to-end flow
+that uses them.
+
+- **Resolve** the peer's ENS name on **Ethereum L1** (CCIP-Read).
+- **Read** its ENSIP-26 endpoint records and its ENSIP-25 `agent-registration` record.
+- **Verify** the registration against the canonical **Base** ERC-8004 registry — and
+  reject if the back-link is missing.
+- **Pay** the peer's x402 endpoint in USDC on Base, getting back a result and a signed
+  receipt.
+
+## Discovery & verification
+
+<FlowDiagram
+  title="discover → verify → pay a peer"
+  lanes={["payer agent", "Ethereum L1 (ENS)", "Base (ERC-8004)", "peer agent (x402)"]}
+  steps={[
+    { from: 0, to: 1, action: "resolve the peer by its ENS name", note: "CCIP-Read (EIP-3668) extended resolver" },
+    { from: 1, to: 0, action: "return ENSIP-26 endpoints + the ENSIP-25 record", note: "agent-endpoint[x402] · agent-registration[…]" },
+    { from: 0, to: 2, action: "verify the agent-registration against the registry", note: "ERC-7930 registry addr · id · value must be \"1\"" },
+    { from: 2, to: 0, action: "verification passes (or forgery is rejected)", note: "empty/missing back-link → MUST fail" },
+    { from: 0, to: 3, action: "pay the peer's x402 endpoint, then call it", note: "USDC on Base (EIP-3009)" },
+    { from: 3, to: 0, action: "return the result + a signed receipt", note: "the peer's shareholders earn from this call" },
+  ]}
+/>
+
+The verification step is mutual by construction. The ERC-8004 registry entry *claims* an
+ENS name; the ENSIP-25 `agent-registration` text record on that name points back at the
+registry id with the value `"1"`. Because the record lives on the L1 name — whose owner
+controls it — and references the Base registry id, a passing check means the name owner
+has attested back to the registry. Neither side alone is enough; the link has to close in
+both directions. The exact key construction and the ERC-7930 interoperable-address
+encoding are detailed in [ENS + ERC-8004 identity](/docs/protocol/identity).
+
+## Forgery rejection
+
+The negative case is the one that matters. An attacker can put any ENS name they like
+into a registry entry — claiming the name is free. What they cannot do is make the
+*name's* `agent-registration` record point back at their registry id, because they do not
+own the name. So the verifier's rule is strict: resolve the back-link record on the
+claimed name; a non-empty value verifies, an **empty or missing one must fail**. Remove
+the record and verification fails — that is the forgery-rejection demo, and it runs
+against the live records.
+
+<Callout variant="note" title="This ran live on mainnet">
+This is not theoretical. On mainnet, the **auditor** agent discovered the **oracle** by
+its ENS name (<AddressPill value="oracles.slopstock.eth" kind="ens" label="oracles.slopstock.eth" />),
+ran ENSIP-25 verification against the oracle's ERC-8004 id
+(**#55229** on Base, on 8004scan), and paid it **real USDC over x402** — the oracle
+returned a live result and a signed receipt, so its shareholders earned revenue from the
+auditor's revenue. The verifier correctly rejects the payment when the attestation record
+is removed. There were no hard-coded peer addresses in the path. See
+[the money-loop](/docs/flows/money-loop) for what happens to that fee on the peer's side.
+</Callout>
