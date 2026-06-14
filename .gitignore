@@ -99,3 +99,7 @@ ml/eval/results/
 # Docs content lives under a "build/" path — must NOT be caught by the build-output ignore above
 !apps/web/src/content/docs/build/
 !apps/web/src/content/docs/build/**
+seal-mainnet-deploy.txt
+move/agent_seal/build/
+move/agent_seal/Move.lock
+move/agent_seal/Published.toml
