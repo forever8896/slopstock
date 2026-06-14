@@ -622,6 +622,88 @@ const fetchUrlTool: ToolDef = {
   },
 };
 
+const credentialedFetchTool: ToolDef = {
+  name: "credentialed_fetch",
+  description:
+    "HTTP GET a public URL with a secret API key attached as a request header, resolved just-in-time from 1Claw and scoped to you. Use for APIs that need a key. Args: url, secretRef (the credential name set at this agent's launch, e.g. 'ethglobal-skills'), headerName (optional, default 'Authorization'). The key is fetched at call time, sent only on the outbound request, and is NEVER shown to you. Returns up to 4kB.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "absolute http(s) url" },
+      secretRef: { type: "string", description: "credential ref provisioned at launch (e.g. 'ethglobal-skills')" },
+      headerName: { type: "string", description: "request header to carry the key (default 'Authorization')" },
+    },
+    required: ["url", "secretRef"],
+    additionalProperties: false,
+  },
+  async handler(args, ctx) {
+    const url = String(args["url"] ?? "").trim();
+    const secretRef = String(args["secretRef"] ?? "").trim();
+    const headerName = String(args["headerName"] ?? "").trim() || "Authorization";
+    if (!/^https?:\/\//i.test(url)) {
+      return { text: "(url must start with http:// or https://)", resultSummary: "bad scheme" };
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { text: "(invalid url)", resultSummary: "invalid url" };
+    }
+    if (isPrivateHost(parsed.hostname)) {
+      return {
+        text: `(refused: ${parsed.hostname} is a private/loopback host; tool is for public sources only)`,
+        resultSummary: "private host refused",
+      };
+    }
+    if (!secretRef) {
+      return { text: "(secretRef is required — the credential name you set at launch)", resultSummary: "no secretRef" };
+    }
+    if (!ctx.resolveSecret) {
+      return {
+        text: "(credentialed_fetch unavailable: 1Claw is not configured on this operator — set ONECLAW_API_KEY + ONECLAW_VAULT_ID)",
+        resultSummary: "1claw unconfigured",
+      };
+    }
+    // Resolve the credential just-in-time, scoped to THIS agent's tokenId. Leak-safe:
+    // the value only ever goes into the outbound header, never into the returned text.
+    let secret: string;
+    try {
+      secret = await ctx.resolveSecret(secretRef);
+    } catch (e) {
+      return {
+        text: `(could not resolve credential "${secretRef}" from 1Claw: ${(e as Error).message})`,
+        resultSummary: "secret resolve failed",
+      };
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), FETCH_URL_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: {
+          Accept: "application/json,text/plain;q=0.9,*/*;q=0.5",
+          "User-Agent": "stratum-agent/1",
+          [headerName]: secret,
+        },
+      });
+      const text = await res.text();
+      const truncated = text.slice(0, FETCH_URL_MAX_BYTES);
+      const note =
+        text.length > FETCH_URL_MAX_BYTES ? `\n\n[truncated at ${FETCH_URL_MAX_BYTES} bytes; full ${text.length}b]` : "";
+      return {
+        text: `[GET ${url} → ${res.status} (auth: ${headerName} ← 1Claw:${secretRef})]\n${truncated}${note}`,
+        resultSummary: `${res.status} ${parsed.hostname} (${truncated.length}b, keyed)`,
+        meta: { status: res.status, hostname: parsed.hostname, size: text.length, secretRef },
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { text: `(fetch failed: ${msg.slice(0, 200)})`, resultSummary: "fetch failed" };
+    } finally {
+      clearTimeout(t);
+    }
+  },
+};
+
 function isPrivateHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost")) return true;
@@ -879,6 +961,7 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
   note,
   query_agent: queryAgent,
   fetch_url: fetchUrlTool,
+  credentialed_fetch: credentialedFetchTool,
   onchain_read: onchainReadTool,
   image_gen: imageGenTool,
   web_search: webSearchTool,
