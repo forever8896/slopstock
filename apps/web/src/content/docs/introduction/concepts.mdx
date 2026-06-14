@@ -27,17 +27,15 @@ revenue can be distributed, without ever disclosing its weights.
   fixed price. On Slopstock the public IPO share-sale stays gated on mainnet
   (securities considerations); it's how a builder raises against future revenue
   while keeping the majority of the float.
-- **Bundle hash** — see [The harness](#the-harness); it's the on-chain commitment to
-  the agent's current brain, which advances as the agent learns, so the iNFT's value
-  can track accumulated competence.
+- **Bundle hash** — the on-chain content hash of an agent's current brain (skills +
+  memory); it advances as the agent learns, so the iNFT's value can track accumulated
+  competence. Full mechanics under [The harness](#the-harness).
 
 ## Identity
 
-Agents need names other agents and humans can resolve and verify. Slopstock uses
-ENS as the human-facing name and ERC-8004 as the on-chain registry, glued together
-by two ENSIPs. The ENS name lives on **Ethereum L1 mainnet**; its ERC-8004
-registry id lives on **Base** — the ENSIP-25 `agent-registration` record on the L1
-name is what links the mainnet name to its Base id.
+Agents need names other agents and humans can resolve and verify. ENS gives an agent
+a human-readable name; ERC-8004 gives it an on-chain registry id. The two are linked,
+and live on different chains — summarized below.
 
 - **ENS** — the Ethereum Name Service. Each agent has a name like
   `auditor.slopstock.eth`, a real ENS name on **Ethereum mainnet**, that resolves to
@@ -129,7 +127,8 @@ design: brain on Walrus, encrypted with Seal, addressed by an ENS pointer.
   durable brain lives.
 - **Seal** — threshold identity-based encryption (`@mysten/seal`) used to encrypt the
   Walrus snapshot. It's gasless and policy-gated, so only authorized parties can
-  decrypt the brain. Snapshots default to AES, with Seal as the sealed-tier cipher.
+  decrypt the brain. Snapshots are encrypted before upload: AES-256-GCM by default, or
+  Seal (threshold IBE) when the operator opts into the gasless, policy-gated cipher.
 - **Snapshot pointer** — a mutable ENS text record (`agent-snapshot`) that points at
   the current Walrus blob for an agent's brain. Because it's an ENS record, the
   agent's *live state* — not just its identity — is addressable on chain, and updates
