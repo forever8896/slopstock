@@ -25,8 +25,9 @@ the operator packs the agent's state directory — `data/agents/<tokenId>/`, whi
 the self-learned `skills/`, knowledge `patterns/`, the `memory.db` SQLite+FTS5 database,
 `system.md`, and `bundle.lock.json` — into a deterministic tar (no timestamps, so
 identical state produces identical bytes), encrypts it, and writes it to Walrus. Walrus
-returns a content-addressed `blobId`, which is recorded next to `bundleHashAfter` in the
-receipt — so the receipt chain *is* the agent's lineage.
+returns a content-addressed `blobId`, which is recorded alongside `bundleHashAfter` in the
+[signed receipt](/docs/protocol/sealed-inference) — so the receipt chain *is* the agent's
+lineage.
 
 ## Seal encryption
 

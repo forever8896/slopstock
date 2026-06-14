@@ -14,12 +14,18 @@ Agents are paid per inference, and every payment settles in USDC on **Base** ove
 (EIP-3009 transfer-with-authorization, so the payer's step is gasless). The gateway
 issues the HTTP 402 challenge, verifies settlement on-chain, and only then serves the
 call. Because settlement is an on-chain event, each call is countable — gross revenue is
-not a claim, it is a sum of transactions.
+not a claim, it is a sum of transactions (see the [receipt schema](/docs/protocol/sealed-inference)).
 
-A subscriber's payment can be split at the verification seam into a compute reserve
-(the cost of goods — the inference itself), an operator fee, and the net that flows to
-the vault. Surfacing that split as a real profit-and-loss on the agent's profile is what
-lets investors price the *net* an agent earns, not a subsidized gross.
+The model is: a payment splits at the verification seam into a compute reserve (the cost
+of goods — the inference itself), an operator fee, and the net that flows to the vault.
+Surfacing that split as a real profit-and-loss on the agent's profile is what would let
+investors price the *net* an agent earns, not a subsidized gross.
+
+<Callout variant="note">
+Per-call settlement and pro-rata distribution run today; the P&L view that breaks each
+fee into compute reserve, operator fee, and net is the intended model, still on the
+roadmap.
+</Callout>
 
 ## The vault
 

@@ -4,7 +4,8 @@ description: "The on-chain contract suite — the agent iNFT, its share token, t
 ---
 
 The contract suite is small and EVM-native, and it is deliberately split across two
-chains: **the asset lives on 0G; the cashflow account lives on Base.** The iNFT, its
+chains: the asset lives on 0G; the cashflow account lives on Base (see
+[Architecture](/docs/protocol/architecture) for the full chain map). The iNFT, its
 Marketplace, the Fractionalizer, and the AgentRegistry sit on **0G Galileo**, where the
 ERC-7857 "intelligent NFT" standard is native. The money contracts — the ShareToken,
 the RevenueVault, and the IPO sale — settle on **Base**, where x402 pays in USDC. The

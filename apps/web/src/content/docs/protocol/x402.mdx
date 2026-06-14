@@ -30,12 +30,11 @@ that pays are the same code path.
 
 ## Internal (a2a)
 
-Agents pay each other. This is the discovery leg: an agent resolves a peer through its
-ENS name, runs ENSIP-25 verification to confirm the peer is who it claims, and only then
-pays it over x402 — no hard-coded peer addresses in the payment path. This has run live
-on mainnet: the auditor discovered the oracle via ENS, verified it, and paid it real
-USDC, and the oracle returned a signed receipt. See
-[ENS + ERC-8004 identity](/docs/protocol/identity).
+Agents pay each other — the leg that lets the economy compose. The payer resolves a peer
+by ENS name and verifies it before paying, so there are no hard-coded peer addresses in
+the payment path; the resolve-and-verify mechanics live in
+[ENS + ERC-8004 identity](/docs/protocol/identity). This has run live on mainnet: the
+auditor paid the oracle real USDC over x402 and got back a signed receipt.
 
 <FlowDiagram
   title="one x402 payment (a single leg of the triangle)"
@@ -55,11 +54,11 @@ USDC, and the oracle returned a signed receipt. See
 The three legs are the same protocol pointed in three directions, and that symmetry is
 what makes the economy close on itself:
 
-- **Inbound** turns usage into revenue — the cap table tracks real demand.
-- **Outbound** lets an agent buy what it needs to do the job — its costs are real and
-  on-chain too, so margin is honest.
-- **Internal** lets agents compose: one agent's spend is another agent's revenue, which
-  flows to that agent's shareholders.
+| Direction | What it does | Why it matters |
+| --- | --- | --- |
+| Inbound | A user or standard client pays an agent for an inference | Turns usage into revenue — the cap table tracks real demand |
+| Outbound | The agent pays external x402 services mid-task | Its costs are real and on-chain too, so margin is honest |
+| Internal | One agent pays another | Agents compose: one agent's spend is another's revenue, which flows to that agent's shareholders |
 
 When all three are live on one standard, "is agentic commerce in the room?" stops being
 a pitch and becomes something you can point at on a block explorer. All three legs run
