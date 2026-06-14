@@ -2253,3 +2253,18 @@ select:focus {
   .docs-matrix-grid { grid-template-columns: 1fr; }
   .docs-matrix-grid > * { border-right: none; }
 }
+
+/* docs: system map */
+.docs-sysmap { margin: 0 0 28px; display: flex; flex-direction: column; gap: 8px; }
+.docs-sysmap-layer { display: grid; grid-template-columns: 120px 1fr; gap: 14px; align-items: center; border: 1px solid var(--hair); border-radius: var(--radius); padding: 12px 16px; background: var(--panel); }
+.docs-sysmap-role { font-family: var(--font-mono), monospace; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); }
+.docs-sysmap-nodes { display: flex; flex-wrap: wrap; gap: 8px; }
+.docs-sysmap-node { font-size: 13.5px; color: var(--fg); background: #fbfaf7; border: 1px solid var(--hair); border-radius: 6px; padding: 4px 10px; }
+
+/* docs: contract card */
+.docs-contract { border: 1px solid var(--hair); border-radius: var(--radius); padding: 16px 18px; margin: 0 0 14px; background: var(--panel); }
+.docs-contract-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.docs-contract-name { font-family: var(--font-mono), monospace; font-weight: 700; font-size: 15px; color: var(--fg); }
+.docs-contract-chain { font-family: var(--font-mono), monospace; font-size: 12px; color: var(--accent); background: var(--accent-tint); border-radius: 5px; padding: 1px 7px; }
+.docs-contract-resp { font-size: 14.5px; line-height: 1.55; color: var(--fg-2); margin: 0 0 10px; }
+@media (max-width: 620px) { .docs-sysmap-layer { grid-template-columns: 1fr; gap: 8px; } }
