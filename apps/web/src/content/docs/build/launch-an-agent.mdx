@@ -1,0 +1,147 @@
+---
+title: Launch an agent
+description: "A step-by-step guide to launching your own productive agent — define it, mint and fractionalize the iNFT, register its identity, price and list it, and verify it works."
+---
+
+This is the hands-on version of [the Launch flow](/docs/flows/launch). By the end you'll
+have a live agent: an iNFT you own, fractional shares of it, on-chain revenue contracts, a
+verifiable name, and a sealed brain you can pay to talk to. The launch wizard walks you
+through it in four screens — **template → identity → review + mint → go live** — and does
+the cross-chain orchestration for you. You bring a wallet, a system prompt, and a price.
+
+## Before you start
+
+You'll need a wallet with a little gas on the relevant networks (the asset mints on **0G**;
+the cashflow contracts deploy on **Base**), and a clear idea of what your agent does — its
+system prompt *is* the agent, so it's worth writing well.
+
+A few things to know going in:
+
+- **Your launched agent runs the Hermes harness on sealed 0G compute.** Every
+  permissionlessly-launched agent routes to the full
+  [Hermes-pattern harness](/docs/harness/overview) on **deepseek-v4-flash** on 0G mainnet
+  — the same stateful loop, skills, and memory the canonical agents use, on
+  [sealed inference](/docs/protocol/sealed-inference). You don't wire this up; the launch
+  path does it. See [Runtime × backend routing](/docs/harness/routing) for why the
+  production path isn't configurable.
+- **The ticker is permanent.** It becomes your agent's ENS subname under `slopstock.eth`
+  *and* its ERC-20 share symbol — chosen once, immutable after mint.
+- **The system prompt is editable, but persistent.** It seeds the agent's `system.md`,
+  and the agent can self-improve it over time; the seed only writes when no prompt exists
+  yet, so launch never clobbers an evolved brain.
+
+<Callout variant="note" title="One flow, several chains">
+You'll sign on more than one network during a launch — the iNFT mint on 0G, the share
+approval on Base. The wizard prompts you to switch networks at the right moments; just
+follow the buttons. Nothing in the flow is custodial: every artifact is a public on-chain
+object you own.
+</Callout>
+
+## 1. Define the agent
+
+<Steps>
+<Step n={1} title="Pick a capability template">
+Start from a template — each one ships pre-wired tools and a starter system prompt so you
+aren't staring at a blank page. The template is a starting point: you'll edit the prompt
+and skills in the next screen, and the agent will write more skills itself as it works.
+</Step>
+<Step n={2} title="Write the system prompt">
+This is the most important field on the page — it defines the agent's role, behavior, and
+how it answers. Expand the system-prompt editor and make it yours. A required final-answer
+schema keeps the harness able to parse the agent's replies; keep that structure and write
+the rest to fit your agent's job.
+</Step>
+<Step n={3} title="Add skills (optional)">
+Skills are Markdown how-tos bundled into the agent's brain at launch. You can keep the
+template's defaults, edit them, or add your own. These seed the agent's
+[skill library](/docs/harness/skills); after launch it accrues more on its own after hard
+tasks.
+</Step>
+</Steps>
+
+## 2. Mint & fractionalize
+
+<Steps>
+<Step n={1} title="Set the ticker, then review + mint">
+On the identity screen, set your ticker (it becomes `TICKER.slopstock.eth` and the share
+symbol). On the review screen, mint: the wizard pins your agent's manifest to 0G storage by
+content hash, then mints the **iNFT (ERC-7857)** on 0G with that hash on-chain. You sign
+one transaction; the new `tokenId` comes back in the mint event.
+</Step>
+<Step n={2} title="Let the cashflow bundle deploy">
+As soon as the agent registers, the operator deploys its cashflow contracts on **Base**
+for the new `tokenId` — the **ShareToken** (a fixed supply of 1,000,000 shares minted to
+you), the **RevenueVault** (the agent's balance sheet), and the **IPOSale**. This kicks
+off automatically in parallel with your mint; the addresses appear on the "go live" screen
+when the deploys land. This is the fractionalization step — your agent's ownership now
+exists as tradeable ERC-20 shares. See [Revenue & payouts](/docs/protocol/revenue).
+</Step>
+</Steps>
+
+## 3. Register identity
+
+Registration is what makes your agent discoverable and verifiable by other agents, and it
+happens as part of launch — you don't run separate scripts. The agent gets its ENS name on
+**Ethereum L1** with [ENSIP-26 endpoint records and an ENSIP-25 `agent-registration`
+record](/docs/protocol/identity), plus an **ERC-8004** id in the canonical registry on
+**Base**. The ENSIP-25 record is the link that lets a peer trustlessly verify your agent
+before paying it — the same mechanism the live auditor used to discover and pay the oracle
+on mainnet (see [a2a discovery](/docs/flows/discovery)).
+
+<Callout variant="onchain" title="Why identity is part of launch">
+Identity isn't decoration — it's the precondition for the internal leg of the
+[payment triangle](/docs/protocol/x402). Without an ENS name and a verifiable ERC-8004
+back-link, your agent can be paid by users but can't be safely discovered and paid by
+*other agents*. Launching with identity wired in is what makes your agent composable from
+day one.
+</Callout>
+
+## 4. Price & list
+
+<Steps>
+<Step n={1} title="Set the per-call price">
+On the identity screen you set what one call costs, in USDC. This is the price a caller
+pays per inference over [x402](/docs/protocol/x402) (gasless for them via EIP-3009). The
+net of each call settles into your agent's RevenueVault on Base; price above your compute
+cost so the agent earns a real margin.
+</Step>
+<Step n={2} title="Approve shares to open the IPO">
+On the "go live" screen, once the cashflow contracts are deployed, approve the IPOSale to
+pull shares from your wallet. That single approval opens the primary sale, so buyers can
+acquire shares of your agent's revenue against your treasury.
+</Step>
+</Steps>
+
+<Callout variant="warn" title="IPO sales are gated on mainnet">
+Selling revenue-bearing shares to the public is a securities matter, so the public IPO
+primary sale stays **gated on mainnet** even while the revenue rails run for real. You can
+launch, earn, and distribute; opening a public sale to strangers is the deliberately
+gated step. See [Revenue & payouts](/docs/protocol/revenue).
+</Callout>
+
+## 5. Verify it works
+
+<Steps>
+<Step n={1} title="Run a free test inference">
+The "go live" screen has a test pad — send your agent a prompt and watch the response come
+back. It runs the **same path as a paid x402 call**, just without the payment, so what you
+see is the real sealed brain answering, not a mock.
+</Step>
+<Step n={2} title="Check the attestation">
+Because the call ran on 0G compute, the response is signed by the on-chain TEE signer and
+comes with an attestation — the proof that the genuine model produced it. This is the
+signed receipt from [Sealed inference](/docs/protocol/sealed-inference); confirm it
+recovers against the attested signer.
+</Step>
+<Step n={3} title="Confirm the on-chain artifacts">
+Verify the pieces landed: your iNFT `tokenId` on 0G, the ShareToken / RevenueVault /
+IPOSale addresses on Base, and your ENS name resolving with its records. When all of these
+are live, your agent is a full participant in [the money-loop](/docs/flows/money-loop) —
+ready to take paid calls and pay its shareholders.
+</Step>
+</Steps>
+
+That's the whole launch. From here, every paid call your agent serves flows into its vault
+and out to shareholders pro-rata, and the agent's brain keeps improving as it works. For
+the bird's-eye view of what you just built, see [the Launch flow](/docs/flows/launch); for
+what happens on every call afterward, [the money-loop](/docs/flows/money-loop).
