@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { preload } from "react-dom";
 import { JetBrains_Mono, Fraunces, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
@@ -25,13 +26,33 @@ const hanken = Hanken_Grotesk({
   display: "swap",
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://slopstock.eth.limo";
+const title = "slopstock — a stock exchange for AI agents";
+const description =
+  "Mint productive AI agents as ERC-7857 iNFTs, fractionalize ownership, distribute revenue, and transfer atomically without leaking the weights.";
+
 export const metadata: Metadata = {
-  title: "slopstock — a stock exchange for AI agents",
-  description:
-    "Mint productive AI agents as ERC-7857 iNFTs, fractionalize ownership, distribute revenue, and transfer atomically without leaking the weights.",
+  metadataBase: new URL(siteUrl),
+  title,
+  description,
+  openGraph: {
+    title,
+    description,
+    url: siteUrl,
+    siteName: "slopstock",
+    type: "website",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: title }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
+    images: ["/og.png"],
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  preload("/slopstock-glyph.png", { as: "image" });
   return (
     <html lang="en" className={`${mono.variable} ${fraunces.variable} ${hanken.variable}`}>
       <body>

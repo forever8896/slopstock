@@ -1823,7 +1823,8 @@ select:focus {
   backdrop-filter: blur(8px);
   position: sticky; top: 0; z-index: 50;
 }
-.m-brand { font-weight: 800; font-size: 18px; letter-spacing: -0.01em; color: var(--fg); }
+.m-brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 800; font-size: 18px; letter-spacing: -0.01em; color: var(--fg); }
+.m-brand img { width: 24px; height: 24px; object-fit: contain; display: block; }
 .m-nav-links { display: flex; align-items: center; gap: 22px; font-size: 15px; }
 .m-nav-links a { color: var(--fg-2); }
 .m-nav-links a:hover { color: var(--accent); }
