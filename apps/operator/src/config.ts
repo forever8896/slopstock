@@ -146,6 +146,18 @@ const envSchema = z.object({
   // Optional comma-separated Seal key-server object IDs (overrides baked-in
   // testnet defaults). Required because the SDK removed getAllowlistedKeyServers.
   SEAL_KEY_SERVERS: z.string().default(""),
+
+  // ── 1Claw cloud-HSM secrets manager (plan 09 Tier-2) ─────────────────────
+  // Credentials for agent tools (e.g. ElevenLabs) live in 1Claw's HSM, fetched
+  // at the tool layer via resolveSecret() and NEVER placed in the LLM context,
+  // skill markdown, or receipt transcript. `1ck_…` keys are used directly as a
+  // Bearer token; `ocv_…` agent keys are exchanged for a short-lived JWT.
+  // When unset, resolveSecret() throws a clear "not configured" error and the
+  // credentialed tool degrades gracefully (never leaks the secret).
+  ONECLAW_API_KEY: z.string().optional(),
+  ONECLAW_BASE_URL: z.string().url().default("https://api.1claw.xyz"),
+  // The vault holding this operator's agent secrets (paths agents/<tokenId>/<ref>).
+  ONECLAW_VAULT_ID: z.string().optional(),
 });
 
 export type OperatorConfig = z.infer<typeof envSchema>;
