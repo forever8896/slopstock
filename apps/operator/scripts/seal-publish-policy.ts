@@ -42,10 +42,19 @@ agent_seal allowlist policy — manual deployment runbook
 The Sui Move package must be built & published with the Sui CLI (not available to this
 script). Run these in an environment that has \`sui\` installed and a funded key:
 
+  # ── TESTNET ──
   sui client switch --env testnet
   sui client faucet                      # fund the SUI_SEAL_KEYPAIR address
   sui move build --path move/agent_seal
   sui client publish --gas-budget 100000000 move/agent_seal
+    # -> copy the published packageId into env as SEAL_PACKAGE_ID
+
+  # ── MAINNET ──  (full guide: docs/nyc-2026/12-seal-mainnet-runbook.md)
+  #  1. In move/agent_seal/Move.toml: switch the Sui dep rev to "framework/mainnet".
+  #  2. Fund the SUI_SEAL_KEYPAIR address with real SUI (NO faucet on mainnet).
+  sui client switch --env mainnet
+  sui move build --path move/agent_seal
+  sui client publish --gas-budget 200000000 move/agent_seal
     # -> copy the published packageId into env as SEAL_PACKAGE_ID
 
 Then set these env vars and re-run this script to create the allowlist:
@@ -55,6 +64,10 @@ Then set these env vars and re-run this script to create the allowlist:
 
   bun run apps/operator/scripts/seal-publish-policy.ts
     # -> prints SEAL_ALLOWLIST_ID (add it to the operator env alongside SEAL_PACKAGE_ID)
+
+On mainnet also set, before running the operator with SNAPSHOT_ENCRYPTION=seal:
+  SEAL_NETWORK=mainnet
+  SEAL_KEY_SERVERS=0x<server-1>,0x<server-2>   # >= SEAL_THRESHOLD verified mainnet servers
 `;
 
 function optionalEnv(name: string): string | undefined {

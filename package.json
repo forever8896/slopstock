@@ -28,9 +28,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0"
   },
+  "//noble": "Do NOT add a flat @noble/curves override here. The EVM stack (viem/ox) hard-pins 1.9.1 while the Mysten SDK (@mysten/seal, @mysten/sui — operator only) needs ^2.0.1. A flat override forces a single version and breaks one side; bun nests both majors correctly on its own (1.9.1 hoisted for the EVM/web build, 2.x nested under the Mysten packages).",
   "overrides": {
-    "@noble/curves": "1.9.1",
-    "@noble/hashes": "1.8.0",
     "@noble/ciphers": "1.3.0"
   },
   "engines": {

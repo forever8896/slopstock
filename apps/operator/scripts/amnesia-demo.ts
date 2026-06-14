@@ -15,7 +15,8 @@
  * # Mode A (self-contained, Walrus testnet only):
  * bun run apps/operator/scripts/amnesia-demo.ts
  *
- * # Mode B (full live: ENS pointer + optional Seal):
+ * # Mode B (full live: ENS pointer + optional Seal). For mainnet Seal, the .env
+ * # carries SEAL_NETWORK=mainnet + SEAL_KEY_SERVERS (docs/nyc-2026/12-seal-mainnet-runbook.md):
  * AMNESIA_LIVE=1 SNAPSHOT_ENCRYPTION=seal ENS_SNAPSHOT_ENABLED=1 \
  *   bash -c 'set -a && . ./.env && set +a && bun run apps/operator/scripts/amnesia-demo.ts'
  */
@@ -33,7 +34,12 @@ const TOKEN_ID = "7";
 const DATA_DIR = resolve(process.cwd(), "data");
 const AGENTS_DIR = join(DATA_DIR, "agents");
 const AGENT_DIR = join(AGENTS_DIR, TOKEN_ID);
-const AGGREGATOR = "https://aggregator.walrus-testnet.walrus.space/v1/blobs";
+// Public aggregator for the printed blob link — network-aware (Walrus net is
+// independent of the Seal net; default testnet).
+const AGGREGATOR =
+  (process.env["WALRUS_NETWORK"] ?? "testnet") === "mainnet"
+    ? "https://aggregator.walrus-mainnet.walrus.space/v1/blobs"
+    : "https://aggregator.walrus-testnet.walrus.space/v1/blobs";
 
 /**
  * Build a realistic agent-brain fixture — mirrors the shape used by

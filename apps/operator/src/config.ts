@@ -144,8 +144,12 @@ const envSchema = z.object({
   // Base64 or bech32 Sui keypair used to sign Seal allowlist access requests.
   SUI_SEAL_KEYPAIR: z.string().default(""),
   // Optional comma-separated Seal key-server object IDs (overrides baked-in
-  // testnet defaults). Required because the SDK removed getAllowlistedKeyServers.
+  // testnet defaults). REQUIRED on mainnet — there are no baked-in mainnet defaults
+  // (pick verified servers from the Seal "Verified Key Servers" docs page).
   SEAL_KEY_SERVERS: z.string().default(""),
+  // Whether the SealClient cryptographically verifies each key server. Empty = default
+  // (true on mainnet, false on testnet); set "true"/"false"/"1"/"0" to override.
+  SEAL_VERIFY_KEY_SERVERS: z.string().default(""),
 
   // ── 1Claw cloud-HSM secrets manager (plan 09 Tier-2) ─────────────────────
   // Credentials for agent tools (e.g. ElevenLabs) live in 1Claw's HSM, fetched

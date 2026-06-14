@@ -1,7 +1,46 @@
 import { test, expect } from "bun:test";
 import { SealCipher } from "./seal.ts";
+import { resolveKeyServerIds, resolveVerifyKeyServers } from "./seal-config.ts";
 
 const LIVE = process.env["SEAL_LIVE_TEST"] === "1"; // set with real SEAL_* env to run
+
+// ── key-server resolution (pure, no network) ──────────────────────────────────
+test("resolveKeyServerIds falls back to baked-in Mysten servers on testnet", () => {
+  const ids = resolveKeyServerIds("testnet", undefined);
+  expect(ids.length).toBe(2); // two canonical Mysten open-mode testnet key servers
+  expect(ids.every((id) => id.startsWith("0x"))).toBe(true);
+});
+
+test("resolveKeyServerIds REQUIRES explicit SEAL_KEY_SERVERS on mainnet", () => {
+  // Mainnet has no baked-in defaults — operator must choose verified key servers.
+  expect(() => resolveKeyServerIds("mainnet", undefined)).toThrow(/SEAL_KEY_SERVERS/);
+  expect(() => resolveKeyServerIds("mainnet", "")).toThrow(/SEAL_KEY_SERVERS/);
+});
+
+test("resolveKeyServerIds parses + trims a comma-separated list (mainnet)", () => {
+  expect(resolveKeyServerIds("mainnet", " 0xaaa , 0xbbb ,0xccc ")).toEqual(["0xaaa", "0xbbb", "0xccc"]);
+});
+
+test("resolveKeyServerIds lets an explicit list override testnet defaults", () => {
+  expect(resolveKeyServerIds("testnet", "0xfeed")).toEqual(["0xfeed"]);
+});
+
+// ── verify-key-servers resolution (pure, no network) ──────────────────────────
+test("resolveVerifyKeyServers defaults to TRUE on mainnet, FALSE on testnet", () => {
+  expect(resolveVerifyKeyServers("mainnet", undefined)).toBe(true);
+  expect(resolveVerifyKeyServers("testnet", undefined)).toBe(false);
+});
+
+test("resolveVerifyKeyServers honors an explicit override either way", () => {
+  expect(resolveVerifyKeyServers("mainnet", "false")).toBe(false);
+  expect(resolveVerifyKeyServers("mainnet", "0")).toBe(false);
+  expect(resolveVerifyKeyServers("testnet", "true")).toBe(true);
+  expect(resolveVerifyKeyServers("testnet", "1")).toBe(true);
+});
+
+test("resolveVerifyKeyServers rejects a non-boolean override", () => {
+  expect(() => resolveVerifyKeyServers("mainnet", "yes-please")).toThrow(/SEAL_VERIFY_KEY_SERVERS/);
+});
 
 test.if(LIVE)("SealCipher round-trips via testnet key servers", async () => {
   const cipher = await SealCipher.fromEnv();
