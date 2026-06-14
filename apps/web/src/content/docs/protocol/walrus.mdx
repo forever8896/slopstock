@@ -1,0 +1,85 @@
+---
+title: Walrus stateless storage
+description: "How an agent's brain lives encrypted on Walrus, addressed by a mutable ENS pointer, so the operator that runs it holds no durable state."
+---
+
+An agent's value is its accumulated brain — the skills it taught itself, what it
+remembers, the receipts that prove its work. If that brain lives only on one operator's
+disk, then "agents as transferable property" is a lie: you can't move the agent without
+moving a machine, and you have to trust whoever holds it. Slopstock's stateless-operator
+design fixes that — the brain lives encrypted on Walrus, addressed by a mutable ENS
+pointer, so any operator can rehydrate any agent from chain plus Walrus alone.
+
+## The problem (stateful operator)
+
+The naive design keeps an agent's state on the operator node — its skills, its memory
+database, its receipts, all on local disk. That makes the operator irreplaceable: lose
+the disk and you lose the agent; trust the operator or don't run the agent. It also
+breaks portability, which is the missing half of ownership. An iNFT you can trade but
+whose brain is stuck on someone's server isn't really transferable property.
+
+## Brain → Walrus
+
+The fix is to treat the brain as a content-addressed blob. After a state-changing task,
+the operator packs the agent's state directory — `data/agents/<tokenId>/`, which holds
+the self-learned `skills/`, knowledge `patterns/`, the `memory.db` SQLite+FTS5 database,
+`system.md`, and `bundle.lock.json` — into a deterministic tar (no timestamps, so
+identical state produces identical bytes), encrypts it, and writes it to Walrus. Walrus
+returns a content-addressed `blobId`, which is recorded next to `bundleHashAfter` in the
+receipt — so the receipt chain *is* the agent's lineage.
+
+## Seal encryption
+
+Snapshots are encrypted before they ever leave the operator, behind a pluggable cipher:
+
+- **AES-256-GCM (default)** — a client-side WebCrypto envelope keyed from the operator's
+  per-agent key. It is the offline and CI path, and it requires no external service.
+- **Seal (threshold IBE)** — `@mysten/seal` threshold identity-based encryption,
+  gasless and policy-gated, so only authorized parties can decrypt. A Sui Move
+  `agent_seal::allowlist` policy package governs who is allowed to. Seal is opt-in via a
+  flag and targets Sui testnet (where Mysten's open-mode key servers run).
+
+Either way the public tape stays public and the brain stays sealed: anyone can see a
+receipt on the Walrus aggregator, but the snapshot bytes are ciphertext.
+
+## The ENS snapshot pointer
+
+A content-addressed blob is immutable, but an agent's brain changes — so something
+mutable has to point at the *current* blob. That pointer is an ENS text record,
+**`agent-snapshot`**, on the agent's L1 name. After each snapshot the operator repoints
+it (`setSnapshotPointer`); to restore, an operator reads it (`readSnapshotPointer`) and
+fetches that blob. Because the pointer is an ENS record, the agent's *live state* — not
+just its identity — is addressable on-chain, and the operator keeps no volume-local
+pointer of its own. That is what makes the operator stateless: the disk becomes an
+optional cache, not a hard dependency.
+
+## Amnesia & cold-boot
+
+The property all of this buys is amnesia resistance. Wipe the operator's local agent
+state entirely and the agent comes back — skills, memory, and all — restored from Walrus
+via its ENS pointer, verified against the receipt hash chain. Receipts are folded into
+the snapshot (`exportAgentReceipts` / `importAgentReceipts`), so `receipts.db` becomes a
+rebuildable cold-start cache rather than the source of truth, and nothing is lost across
+a restart.
+
+<FlowDiagram
+  title="snapshot & restore (cold-boot from ENS + Walrus)"
+  lanes={["operator", "cipher (AES / Seal)", "Walrus (Sui)", "ENS agent-snapshot (L1)"]}
+  steps={[
+    { from: 0, to: 1, action: "tar the agent dir, then encrypt", note: "deterministic tar → ciphertext" },
+    { from: 1, to: 2, action: "store the encrypted blob", note: "Walrus returns a content-addressed blobId" },
+    { from: 0, to: 3, action: "repoint agent-snapshot at the new blobId", note: "setSnapshotPointer (mutable ENS record)" },
+    { from: 0, to: 3, action: "— wipe disk — then read the pointer", note: "readSnapshotPointer → current blobId" },
+    { from: 0, to: 2, action: "fetch the blob by id", note: "from a public Walrus aggregator" },
+    { from: 1, to: 0, action: "decrypt and untar → brain restored", note: "byte-identical; verified vs receipt chain" },
+  ]}
+/>
+
+<Callout variant="warn" title="What's proven vs. by design">
+**Amnesia Mode A is proven live** — a full wipe of the agent state directory and a
+byte-identical restore from live Walrus testnet, using the AES cipher. The full live
+**Mode B** cold-boot — ENS-pointer restore with the Seal cipher end-to-end — is
+code-complete but depends on user-provisioned infrastructure (a published Sui Move
+policy, Seal key configuration, the ENS pointer enabled) and is described here as the
+design where it is not yet proven live.
+</Callout>

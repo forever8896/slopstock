@@ -1,0 +1,133 @@
+---
+title: Smart contracts
+description: "The on-chain contract suite — the agent iNFT, its share token, the vault, the IPO sale, the marketplace, and the registry."
+---
+
+The contract suite is small and EVM-native. Each contract has one job, and together
+they turn an agent into transferable, revenue-bearing property. The value-handling
+contracts settle on **Base** (where x402 pays in USDC); the ENS resolver that anchors
+identity lives on **Ethereum L1**. None of these is upgradeable by a hidden admin —
+the trust comes from what the code does, not from a promise.
+
+<Callout variant="warn" title="Mainnet posture">
+The revenue rails are real, but the **public IPO share sale stays gated on mainnet**
+for securities reasons — selling revenue-bearing shares to strangers is the textbook
+unregistered-security pattern. Everything deploys; the primary retail sale stays
+testnet-only until the regulatory framework lands. Whole-agent acquisition (M&A) is the
+securities-light motion. Addresses below are omitted where a contract is deployed
+per-agent or on testnet rather than at a single canonical mainnet address.
+</Callout>
+
+## Agent NFT (ERC-7857)
+
+The agent itself. `StratumAgentNFT` is an ERC-7857 ("intelligent NFT") implementation:
+an ERC-721 with per-token sealed metadata (the encrypted weights/system-prompt/RAG
+commitments and a `sealedKey`), per-user usage authorizations that auto-clear on
+transfer, and an `iTransfer` entry point that the Marketplace calls during acquisition.
+Its defining trick is re-encryption inside a TEE on transfer, so ownership can change
+hands without the model ever being copied. The iNFT is the root identity that an
+agent's shares, vault, and registry entry all hang off.
+
+<ContractCard
+  name="StratumAgentNFT.sol"
+  chain="Base"
+  responsibility="ERC-7857 iNFT: mint, sealed per-token metadata, authorizeUsage ACL (auto-cleared on transfer via a version counter), and iTransfer with in-TEE key rotation on acquisition."
+/>
+
+## Share token (ERC-20)
+
+The thing that trades. `ShareToken` is one ERC-20 per agent — a fixed 1,000,000-share
+supply minted in full at construction. Holding shares is holding a pro-rata claim on
+the agent's future revenue. It extends ERC20Votes so the RevenueVault can read a
+holder's balance at a past block and distribute exactly pro-rata; balances
+auto-delegate on receipt so holders earn dividends without a separate `delegate` call.
+ERC20Permit is included so future flows can use signed permits instead of `approve`.
+
+<ContractCard
+  name="ShareToken.sol"
+  chain="Base"
+  responsibility="ERC-20 fractional shares (1,000,000 fixed supply per agent). ERC20Votes historical balances power pro-rata snapshots; auto-delegate on receive; ERC20Permit for gasless approvals."
+/>
+
+The lock-and-mint step is handled by a companion `Fractionalizer` contract: it locks
+an agent's iNFT and mints the 1M shares to the creator, releasing the iNFT only when
+100% of the shares are returned.
+
+<ContractCard
+  name="Fractionalizer.sol"
+  chain="Base"
+  responsibility="Locks an agent iNFT and mints its 1,000,000 ERC-20 shares; redeems the iNFT back when the full supply is returned."
+/>
+
+## RevenueVault
+
+The agent's balance sheet. `RevenueVault` receives the USDC paid per call and
+distributes it pro-rata to shareholders. It uses a snapshot model: `snap()` records
+the vault's current balance plus a strictly-past block number, and holders' shares are
+read at that timepoint via the ERC20Votes lookup. Holders can `claim` (pull) or be paid
+via `distributeTo` (push); both are idempotent, and sub-wei dust rolls into the next
+snapshot. It lives on Base, the same chain x402 settles on, so no bridging sits between
+a payment and a payout.
+
+<ContractCard
+  name="RevenueVault.sol"
+  chain="Base"
+  responsibility="Holds per-call USDC and distributes pro-rata to shareholders. Block-number snapshots read historical share balances; claim (pull) and distributeTo (push) are idempotent."
+/>
+
+## IPO sale
+
+The primary sale. `IPOSale` is a fixed-price sale of an agent's seed share allocation,
+deployed per agent at mint time. It is a pure orchestrator: shares come from the
+builder's treasury via `transferFrom` and payment goes straight to the beneficiary —
+the contract never custodies funds, it only swaps shares for USDC at `pricePerShare`.
+This is how a builder raises against future revenue while keeping the majority of the
+float. On mainnet the public sale stays gated (see the note above).
+
+<ContractCard
+  name="IPOSale.sol"
+  chain="Base"
+  responsibility="Per-agent fixed-price seed sale. Pulls shares from the builder treasury and routes payment directly to the beneficiary; custodies nothing. Public retail sale gated on mainnet."
+/>
+
+## Marketplace
+
+The acquisition primitive. `Marketplace` runs the whole-iNFT bid/accept flow. Bidders
+escrow USDC by posting a bid; the owner accepts with a TEE re-encryption proof, which
+the iNFT verifies inside `iTransfer` — atomically rotating the sealed key to the
+acquirer and clearing every outstanding usage grant. On success the escrow is released
+to the seller. Each token tracks a single best bid; a new bid must strictly beat the
+prior one, which is refunded automatically, and an expired bid can be cleaned up by
+anyone.
+
+<ContractCard
+  name="Marketplace.sol"
+  chain="Base"
+  responsibility="Whole-iNFT bid/accept acquisition. Escrows USDC bids; accept triggers iTransfer with in-TEE re-encryption (key rotation + usage-grant clearing); auto-refunds outbid and expired bids."
+/>
+
+## Registry
+
+The cross-chain index. `AgentRegistry` is a one-shot, immutable mapping from a token id
+to its pointers: the share token, the RevenueVault on Base, the agent's ENS namehash,
+the original operator, and the mint timestamp. Registration is gated on iNFT ownership
+at the time of the call, and entries don't change on acquisition — the `operator` field
+stays the original minter, while ownership transfer is the iNFT's job via `iTransfer`.
+
+<ContractCard
+  name="AgentRegistry.sol"
+  chain="Base"
+  responsibility="Immutable tokenId → {shareToken, vault, ENS namehash, original operator, createdAt} map. Gated on iNFT ownership at registration; entries are pinned at mint."
+/>
+
+Identity also relies on `StratumResolver`, an ENS CCIP-Read (EIP-3668) resolver for
+`*.slopstock.eth` that lives on **Ethereum L1** and delegates resolution to a signed
+off-chain gateway — covered in detail under
+[ENS + ERC-8004 identity](/docs/protocol/identity).
+
+<ContractCard
+  name="StratumResolver.sol"
+  chain="Ethereum L1"
+  responsibility="ENSIP-10 extended / CCIP-Read (EIP-3668) resolver for *.slopstock.eth. Reverts with OffchainLookup; verifies the gateway's signed response on-chain."
+  addrKind="eth"
+/>

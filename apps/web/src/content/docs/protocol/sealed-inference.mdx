@@ -1,0 +1,100 @@
+---
+title: Sealed inference (TEE)
+description: "Why agent inference runs inside a Trusted Execution Environment, how attestation works, and how a signed receipt proves the real agent answered."
+---
+
+When you pay an agent, you need proof that the *real* agent answered, untampered —
+without the agent's weights ever being exposed. Slopstock gets both by running inference
+inside a Trusted Execution Environment and returning a cryptographic attestation with
+every call. This is the cryptographic heart of the project: every other layer —
+revenue, identity, the cap table — ultimately rests on someone trusting that the agent
+really ran.
+
+## Why sealed
+
+An agent is valuable property only if it can be sold without being copied, and only if
+its output can be trusted without exposing how it was produced. Sealed inference is what
+makes both true at once:
+
+- **The model stays private.** Weights, system prompt, and any corpus are encrypted; the
+  decryption key is unwrapped only inside the enclave. The operator running the agent
+  never sees them, and neither does the caller.
+- **The output stays trustless.** The enclave attests to exactly what code ran, so a
+  caller can verify the genuine agent produced the result — the model stays ownable, the
+  output stays provable.
+- **Ownership can change hands cleanly.** On acquisition the key is rotated inside the
+  TEE, so a former owner who kept their old key can no longer run the agent.
+
+Slopstock's launched agents run on **0G compute** — TEE-attested inference with
+**deepseek-v4-flash** as the production model. The runtime above that call is the
+Hermes-pattern harness; this page is about the seal beneath it.
+
+## How attestation works
+
+A TEE runs the model inside a hardware enclave and produces an attestation quote — a
+hardware-signed statement of what code and configuration ran. The chain of trust is:
+
+<Steps>
+<Step n={1} title="Pin the measurement at mint">
+When an agent is minted, the expected enclave measurement is committed on-chain in the
+iNFT. This is the fingerprint a caller will later check against — set once, verifiable by
+anyone.
+</Step>
+<Step n={2} title="Run the call in the enclave">
+The agent's encrypted material is loaded and decrypted only inside the TEE. The model
+runs there; the operator outside the enclave never sees inputs, outputs, or weights.
+</Step>
+<Step n={3} title="Emit a quote per call">
+The TEE produces an attestation quote for the call, signed by a hardware-rooted key and
+bound to the measurement that ran.
+</Step>
+<Step n={4} title="Bind it into the receipt">
+The operator wraps the result and the quote into a signed receipt and returns both to
+the caller.
+</Step>
+</Steps>
+
+## The signed receipt
+
+Every inference returns a receipt — the canonical `stratum/receipt/v2` schema. It is the
+difference between a result and a *provable* result, and it carries far more than the
+answer:
+
+- **Identity & I/O** — the agent `tokenId`, the `subscriber`, a `callId`, and the input
+  and output hashes (not the plaintext).
+- **The attestation** — `teeAttestation` with the enclave `vendor`, the `quote`, and the
+  `measurement` that ran.
+- **The model & runtime** — the `model` string (e.g. deepseek-v4-flash), the
+  `agentRuntime` (the Hermes-pattern harness), and the `computeBackend`
+  (`0g-compute` when sealed, `openai-compat` otherwise).
+- **The state delta** — `bundleHashBefore`, `bundleHashAfter`, and `stateDeltaHash`, so
+  the receipt commits to how the agent's brain moved, plus the skills it loaded and
+  created.
+- **The proofs** — the `paymentProof` (the x402 settlement) and the operator's `signature`
+  over a digest of the call.
+
+<Callout variant="onchain" title="What the receipt commits to">
+The signed digest covers the call id, token id, subscriber, output hash, state-delta
+hash, and timestamp — so a verifier can reject any receipt whose claimed bundle hash
+doesn't match what the agent committed on-chain. The receipt chain is also the agent's
+**lineage**: each receipt records the Walrus blob of the brain snapshot taken alongside
+it. See [Walrus stateless storage](/docs/protocol/walrus).
+</Callout>
+
+## Verifying a receipt
+
+A caller verifies a receipt before trusting the answer. The check is mechanical and runs
+client-side:
+
+1. **Read the expected measurement** for the agent's `tokenId` from the iNFT on-chain.
+2. **Parse the attestation quote** out of the receipt.
+3. **Verify the quote** against the enclave vendor's root certificate (an off-chain call
+   to the attestation service).
+4. **Compare the measurement** in the quote against the on-chain expected value — a
+   mismatch means a different model ran, so reject.
+5. **Check the output signature** against the attested signing key.
+
+If any step fails, the output is unattested and should not be trusted. When the backend
+is a plain `openai-compat` endpoint (local or dev) rather than 0G compute, the
+attestation slot is empty by design — the receipt is honest about which path produced it,
+so an unsealed result is never silently presented as a sealed one.

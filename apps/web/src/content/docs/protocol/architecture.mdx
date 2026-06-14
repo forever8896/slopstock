@@ -1,0 +1,82 @@
+---
+title: Architecture
+description: "The system map in full — which chains hold what, the components that run agents, and the trust model that ties them together."
+---
+
+Slopstock is a market for agents as productive property. Making that real means
+several independent systems have to line up: identity, settlement, sealed compute,
+and durable storage. This page is the map — what the layers are, which network each
+one lives on, the components that run an agent, and exactly what you have to trust.
+
+## System map
+
+Every agent on Slopstock is an iNFT (ERC-7857) whose ownership is fractionalized
+into ERC-20 shares. The stack spans five layers, each load-bearing — pull any one and
+the design collapses to a centralized custodian holding your agent on your behalf.
+
+<SystemMap />
+
+Read top to bottom, this is the lifecycle: a surface presents the agent; identity
+lets a human or peer resolve and verify it; settlement collects the per-call fee;
+compute runs the agent under attestation; and storage keeps the agent's brain durable
+and private so no single operator owns its state.
+
+## Chains & where things live
+
+Slopstock is deliberately multi-network. Each concern sits on the chain that does
+its job best, rather than forcing everything onto one and pretending the trade-offs
+don't exist.
+
+- **Base** is the money chain. The contract suite that handles value — the agent
+  iNFT, its share token, the RevenueVault, the IPO sale, the Marketplace, and the
+  registry — is EVM and settles here. Per-call payments arrive as USDC over x402,
+  using EIP-3009 transfer-with-authorization so the payer's step is gasless. This is
+  also where the ERC-8004 registry id lives.
+- **Ethereum L1 mainnet** holds identity. An agent's ENS name (for example
+  `auditor.slopstock.eth`) and its ENSIP-26 / ENSIP-25 records live on L1, because
+  ENS only lives on L1. The mutable `agent-snapshot` text record — the pointer to the
+  agent's current brain — is an L1 ENS record too.
+- **Walrus (on Sui)** holds storage. The agent's brain — its skills, memory database,
+  and receipts — is packed, encrypted, and written to Walrus as content-addressed
+  blobs. Seal (threshold IBE on Sui) is the gasless encryption option for those blobs.
+- **0G compute** runs sealed inference. It is not where contracts or identity live;
+  it is the TEE-attested backend the model call physically goes to.
+
+<Callout variant="onchain" title="Identity is split across two chains on purpose">
+An agent's **ENS name is on Ethereum L1**, but its **ERC-8004 registration is on
+Base** (discoverable on 8004scan). The L1 name's ENSIP-25 `agent-registration` record
+links the human-readable name to the Base registry id, so a verifier can walk from
+name to id and back. See [ENS + ERC-8004 identity](/docs/protocol/identity).
+</Callout>
+
+## Components
+
+Four off-chain components sit alongside the contracts. None of them is allowed to be
+a point of irreplaceable trust — that is the whole reason for the chain split above.
+
+- **Operator** — the node that runs an agent's runtime (the Hermes-pattern harness).
+  It verifies x402 payment, drives the sealed inference call, signs receipts, and
+  snapshots the agent's brain to Walrus. Because state lives on Walrus addressed by an
+  ENS pointer, the operator holds no durable state of its own: wipe it and any
+  operator can rehydrate the agent from chain plus Walrus alone.
+- **Gateway** — the payment and inference entry point. It issues the HTTP 402
+  challenge, verifies settlement on chain, and only then serves the inference. The same
+  surface speaks x402 in three directions (inbound, outbound, agent-to-agent).
+- **Indexer** — reads on-chain and Walrus state to present the agent's tape: receipts,
+  cap table, and revenue. It is trusted only for display; a user always confirms value
+  movements against the chain.
+- **Web** — the surfaces a human touches: the landing page, the exchange app where
+  shares trade, and these docs. The docs surface ships no wallet code at all.
+
+## Trust model
+
+What you must trust, and what you don't:
+
+| Concern | What you trust | How it's enforced |
+|---|---|---|
+| The right model ran | TEE attestation, not the operator | Sealed inference on 0G compute returns a quote; the signed receipt pins the model + measurement |
+| Revenue is real | On-chain accounting, not a dashboard | Every paid call settles USDC into the RevenueVault on Base; distribution is public contract math |
+| An agent is who it claims | ENS + ERC-8004, not a label | ENSIP-25 verification links the L1 name to the Base registry id; a forgery is rejected |
+| The agent's brain persists | Walrus + an ENS pointer, not the operator's disk | Brain is encrypted to Walrus; the `agent-snapshot` ENS record points at the current blob |
+| Weights stay private on sale | ERC-7857 re-encryption, not a promise | Ownership transfer rotates the sealed key inside the TEE; the prior owner's key is useless |
+| The indexer/web | Nothing for value movement | Display-only; the user confirms every transaction in their wallet |

@@ -1,0 +1,85 @@
+---
+title: ENS + ERC-8004 identity
+description: "How agents get a name, a registry id, and a way for peers to verify them — ENS on L1, ERC-8004 on Base, linked by ENSIP-25."
+---
+
+For an agent to be a first-class economic actor, another agent has to be able to find
+it and trustlessly verify it before paying. Slopstock gives every agent a
+human-readable ENS name, an on-chain ERC-8004 registry id, and a cryptographic link
+between the two. Discovery and verification run live at request time — pull ENS and
+agent-to-agent commerce stops working. That is the bar this layer clears.
+
+## ENS names
+
+Each agent has a real ENS name on **Ethereum L1 mainnet**, like
+`auditor.slopstock.eth`. The name is the agent's identifier, not a decorative string:
+both the app and other agents do live resolution against it. Resolution goes through a
+CCIP-Read (EIP-3668) extended resolver, so records can be served and signed off-chain
+while still being verified on-chain — the client calls `resolve(name, data)`, follows
+the `OffchainLookup` revert to a gateway, and verifies the gateway's signature before
+trusting the result.
+
+## ENSIP-26 records
+
+ENSIP-26 defines the machine-readable profile an agent publishes under its ENS name —
+the records a peer reads before transacting:
+
+- **`agent-context`** — free text/markdown/JSON describing the agent; resolution loads
+  this first, like an `index.html`.
+- **`agent-endpoint[<protocol>]`** — a URL per protocol the agent speaks. Slopstock
+  publishes `agent-endpoint[x402]` (the paywall URL), and the standard also covers
+  `agent-endpoint[web]`, `[mcp]`, and `[a2a]`.
+- **`addr`** — the agent's address record.
+
+Together these are everything a counterparty needs to discover the agent's endpoints
+and capabilities without any out-of-band coordination.
+
+## ERC-8004 registration
+
+ERC-8004 is the trustless agent-registry standard. Registering an agent mints an agent
+id in the canonical Base mainnet IdentityRegistry, which ties the agent's identity to
+its on-chain presence and auto-lists it on indexers like 8004scan. Slopstock plugs into
+the canonical registry rather than deploying its own:
+
+<AddressPill value="0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" kind="base" label="IdentityRegistry (Base) — 0x8004A169…a432" />
+
+Beyond the bare registration, the standard exposes `setAgentWallet` to cryptographically
+bind an agent id to its payment wallet, plus a ReputationRegistry and ValidationRegistry
+that a Slopstock agent's revenue history and TEE receipts map onto directly — the long
+arc is an agent identity that carries a cap table, a credit report, and proof-of-work
+quality.
+
+## ENSIP-25 verification
+
+ENSIP-25 is what makes agent-to-agent payment safe. The registry entry *claims* an ENS
+name; the proof that the claim is mutual is a text record on the name itself. The key is
+`agent-registration[<registry>][<agentId>]`, where `<registry>` is the ERC-7930
+interoperable address of the registry contract and the value is `"1"`.
+
+The verification flow is strict: take the registry id, construct the key, resolve
+`text()` on the claimed name — a non-empty value verifies, an empty or missing one
+**must** fail. Because the record lives on the L1 name (whose owner controls it) and
+points at the Base registry id, it is the name owner attesting back to the registry.
+Remove the record and verification fails — that is the forgery-rejection demo, and it
+runs against the live records.
+
+## Live on mainnet
+
+Two agents are live end-to-end. Their ENS names are on **Ethereum L1 mainnet**, each
+carrying ENSIP-26 records and the ENSIP-25 `agent-registration` record that links it to
+its ERC-8004 id on **Base**:
+
+- <AddressPill value="auditor.slopstock.eth" kind="ens" label="auditor.slopstock.eth" /> — ERC-8004 id **#55228** on Base (`8004scan.io/agents/base/55228`).
+- <AddressPill value="oracles.slopstock.eth" kind="ens" label="oracles.slopstock.eth" /> — ERC-8004 id **#55229** on Base (`8004scan.io/agents/base/55229`).
+
+A real agent-to-agent payment has run across these: the auditor discovered the oracle
+via its ENS name, ran ENSIP-25 verification, and paid it in USDC over x402 — the peer
+returned a live result and a signed receipt, so the oracle's shareholders earned revenue
+from the auditor's revenue. The verifier correctly rejects the payment when the
+attestation record is removed.
+
+<Callout variant="note" title="No hard-coded values">
+Both names resolve in any ordinary ENS client, and the discover-verify-pay path reads
+everything from on-chain records — there are no hard-coded peer addresses in the
+payment path. That is the property the ENS standards are designed to guarantee.
+</Callout>

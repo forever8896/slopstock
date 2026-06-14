@@ -1,0 +1,74 @@
+---
+title: Revenue & payouts
+description: "How a per-call fee becomes a pro-rata dividend — the vault, the snapshot math, and the LI.FI loop that lets an agent fund its own compute."
+---
+
+A Slopstock share is worth exactly what the agent earns. That only holds if every paid
+call is accounted for on-chain and distributed to holders pro-rata — no dashboards, no
+trust-me numbers. This page traces a fee from the moment it is paid to the moment a
+shareholder can claim it, and how an agent pays for its own compute out of that revenue.
+
+## Per-call revenue
+
+Agents are paid per inference, and every payment settles in USDC on **Base** over x402
+(EIP-3009 transfer-with-authorization, so the payer's step is gasless). The gateway
+issues the HTTP 402 challenge, verifies settlement on-chain, and only then serves the
+call. Because settlement is an on-chain event, each call is countable — gross revenue is
+not a claim, it is a sum of transactions.
+
+A subscriber's payment can be split at the verification seam into a compute reserve
+(the cost of goods — the inference itself), an operator fee, and the net that flows to
+the vault. Surfacing that split as a real profit-and-loss on the agent's profile is what
+lets investors price the *net* an agent earns, not a subsidized gross.
+
+## The vault
+
+The net lands in the agent's `RevenueVault` on Base — its balance sheet. The vault does
+two things: it holds the USDC, and it remembers who the shareholders were at the moment
+revenue was booked, so a later trade can't dilute an earlier distribution.
+
+It does that with a snapshot. Calling `snap()` records the vault's current USDC balance
+together with a strictly-past block number. Holder balances are then read at that
+timepoint using the share token's historical (ERC20Votes) balance lookup — which is why
+the share token auto-delegates on receipt, so every holder is counted without having to
+opt in first.
+
+## Pro-rata distribution
+
+Once a snapshot exists, each holder's share of that snapshot's balance is their fraction
+of the supply at that timepoint. Holders can pull their share with `claim`, or the
+operator can push it with `distributeTo`; both settle identically and are idempotent, so
+a holder is never paid twice and a sweep never loops forever. Integer-division dust stays
+in the vault and rolls into the next snapshot.
+
+<FlowDiagram
+  title="per-call fee → shareholder dividend"
+  lanes={["caller", "gateway", "RevenueVault (Base)", "ShareToken", "shareholder"]}
+  steps={[
+    { from: 0, to: 1, action: "pay per call over x402, then request inference", note: "USDC on Base (EIP-3009)" },
+    { from: 1, to: 2, action: "net fee settles into the agent's vault", note: "every call accounted on-chain" },
+    { from: 2, to: 2, action: "snap(): record balance + a strictly-past block", note: "the distribution timepoint" },
+    { from: 2, to: 3, action: "read each holder's balance at that block", note: "ERC20Votes historical lookup" },
+    { from: 2, to: 4, action: "claim (pull) or distributeTo (push), pro-rata", note: "idempotent; dust rolls forward" },
+  ]}
+/>
+
+## Self-funding (LI.FI bridge)
+
+There is one seam left: revenue arrives as USDC on Base, but sealed compute is metered
+in OG on 0G. An agent that earns on one chain and spends on another would stall the
+moment its compute ledger ran dry. Slopstock closes that loop with LI.FI.
+
+The operator watches the 0G compute ledger; when it drops below a threshold, it bridges
+USDC earned on Base into native OG via LI.FI's quote API, then tops up the compute
+account. The agent keeps running on its own earnings, and the top-up lands in the receipt
+chain so it shows up in the agent's P&L. This leg is shipped and proven on mainnet via a
+real LI.FI L1-ETH→0G-OG bridge — the full launch → pay → sealed inference → receipt →
+vault → snapshot → shareholder-paid loop has been run green end-to-end.
+
+<Callout variant="warn" title="IPO stays gated on mainnet">
+Distributing revenue to ourselves (when we hold 100% of an agent's shares) is just moving
+our own money. Selling revenue-bearing shares to the public is different — so the IPO
+primary sale stays gated on mainnet for securities reasons while the revenue rails run
+for real. See [Smart contracts](/docs/protocol/smart-contracts).
+</Callout>

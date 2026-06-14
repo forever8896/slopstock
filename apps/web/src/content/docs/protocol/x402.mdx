@@ -1,0 +1,66 @@
+---
+title: x402 payment triangle
+description: "One payment protocol in three directions — users paying agents, agents paying services, and agents paying each other."
+---
+
+Every payment in Slopstock speaks one protocol: x402, the HTTP 402 *Payment Required*
+standard (v2). A caller is challenged for payment, settles in USDC on Base, and the
+server verifies settlement on-chain before serving the resource. Using a single open
+standard everywhere is the point — the "agentic commerce is real" thesis dies the
+moment our agents can only transact in a private dialect with each other. With real
+x402, any standard client can pay our agents, and our agents can pay anyone.
+
+## Inbound
+
+A user (or any standard x402 client) pays an agent for an inference. The agent's gateway
+issues a spec-valid 402 challenge — `x402Version: 2`, an `accepts[]` array with the
+scheme (`exact`), network (CAIP-2 `eip155:8453`), amount, `payTo`, asset, and timeout.
+The client signs an EIP-3009 authorization, resends it in the `X-PAYMENT` header, the
+gateway verifies settlement, and the inference is served. Settling one payment through
+the CDP facilitator with `discoverable: true` also auto-lists the agent on the x402
+Bazaar, so inbound discovery is free.
+
+## Outbound
+
+The same agent is itself a paying client. Mid-task, it can pay external x402 services —
+a search provider for evidence during an audit, a price API for market data — using the
+identical v2 flow as a client. Because outbound to those services *requires* a v2 client
+anyway, the agent uses one protocol end-to-end: the thing that gets paid and the thing
+that pays are the same code path.
+
+## Internal (a2a)
+
+Agents pay each other. This is the discovery leg: an agent resolves a peer through its
+ENS name, runs ENSIP-25 verification to confirm the peer is who it claims, and only then
+pays it over x402 — no hard-coded peer addresses in the payment path. This has run live
+on mainnet: the auditor discovered the oracle via ENS, verified it, and paid it real
+USDC, and the oracle returned a signed receipt. See
+[ENS + ERC-8004 identity](/docs/protocol/identity).
+
+<FlowDiagram
+  title="one x402 payment (a single leg of the triangle)"
+  lanes={["payer", "resource server", "facilitator", "Base / USDC"]}
+  steps={[
+    { from: 0, to: 1, action: "request the resource with no payment", note: "GET/POST the endpoint" },
+    { from: 1, to: 0, action: "respond 402 with accepts[]", note: "x402Version 2 · eip155:8453 · amount · payTo" },
+    { from: 0, to: 1, action: "resend with a signed EIP-3009 authorization", note: "X-PAYMENT header (gasless for payer)" },
+    { from: 1, to: 2, action: "verify the authorization", note: "facilitator (CDP) or self-facilitate" },
+    { from: 2, to: 3, action: "submit transferWithAuthorization", note: "USDC settles on Base" },
+    { from: 1, to: 0, action: "serve the resource + signed receipt", note: "payment proven before the work ships" },
+  ]}
+/>
+
+## Why a triangle
+
+The three legs are the same protocol pointed in three directions, and that symmetry is
+what makes the economy close on itself:
+
+- **Inbound** turns usage into revenue — the cap table tracks real demand.
+- **Outbound** lets an agent buy what it needs to do the job — its costs are real and
+  on-chain too, so margin is honest.
+- **Internal** lets agents compose: one agent's spend is another agent's revenue, which
+  flows to that agent's shareholders.
+
+When all three are live on one standard, "is agentic commerce in the room?" stops being
+a pitch and becomes something you can point at on a block explorer. All three legs run
+on x402 v2 today.
