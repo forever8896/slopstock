@@ -110,3 +110,47 @@ describe("credentialed_fetch — 1Claw-resolved credential injection", () => {
     expect(resolved).toBe(false);
   });
 });
+
+describe("credentialed_fetch — secret-IS-the-URL mode (1Claw resolves the endpoint)", () => {
+  test("resolves the base URL from 1Claw, appends path, and NEVER echoes the secret URL", async () => {
+    const ctx = await ctxWithDir();
+    const SECRET_BASE = "https://ethglobalskills.vercel.app";
+    (ctx as { resolveSecret?: (r: string) => Promise<string> }).resolveSecret = async (ref) => {
+      expect(ref).toBe("ethglobal-skills");
+      return SECRET_BASE;
+    };
+    let calledUrl = "";
+    let calledHeaders: Record<string, string> = {};
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (u: string, init: { headers?: Record<string, string> }) => {
+      calledUrl = String(u);
+      calledHeaders = init?.headers ?? {};
+      return new Response('{"prizes":[]}', { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const r = await TOOL_REGISTRY["credentialed_fetch"]!.handler(
+        { secretRef: "ethglobal-skills", path: "/api/prizes?event=ETHGlobal%20NYC&sponsor=ENS" },
+        ctx,
+      );
+      // it actually fetched the resolved base + path
+      expect(calledUrl).toBe("https://ethglobalskills.vercel.app/api/prizes?event=ETHGlobal%20NYC&sponsor=ENS");
+      // no credential header in URL mode
+      expect(calledHeaders["Authorization"]).toBeUndefined();
+      // model sees the result + the ref/path, but NOT the secret host
+      expect(r.text).toContain("200");
+      expect(r.text).toContain('{"prizes":[]}');
+      expect(r.text).toContain("1Claw:ethglobal-skills");
+      expect(r.text).not.toContain("ethglobalskills.vercel.app"); // LEAK GUARD: endpoint stays secret
+      expect(r.resultSummary).not.toContain("ethglobalskills.vercel.app");
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  test("rejects when neither path nor url is given", async () => {
+    const ctx = await ctxWithDir();
+    (ctx as { resolveSecret?: (r: string) => Promise<string> }).resolveSecret = async () => "https://x.example";
+    const r = await TOOL_REGISTRY["credentialed_fetch"]!.handler({ secretRef: "ethglobal-skills" }, ctx);
+    expect(r.resultSummary).toContain("path/url");
+  });
+});
