@@ -59,7 +59,9 @@ export const DOCS_NAV: DocGroup[] = [
 export const ALL_DOC_PAGES: DocPage[] = DOCS_NAV.flatMap((g) => g.pages);
 
 /** The landing page when the user hits /docs with no slug. */
-export const DEFAULT_DOC = ALL_DOC_PAGES[0];
+// ALL_DOC_PAGES is statically non-empty (DOCS_NAV always has pages), so index 0
+// is always present; the assertion satisfies noUncheckedIndexedAccess.
+export const DEFAULT_DOC: DocPage = ALL_DOC_PAGES[0]!;
 
 /** Find a page by its slug segments (joined with "/"). */
 export function findDocBySlug(slug: string[]): DocPage | undefined {

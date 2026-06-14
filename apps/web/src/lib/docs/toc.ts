@@ -29,8 +29,9 @@ export function extractToc(source: string): TocEntry[] {
     if (inFence) continue;
     const m = /^(#{2,3})\s+(.+?)\s*$/.exec(line);
     if (!m) continue;
-    const depth = m[1].length as 2 | 3;
-    const text = m[2].trim();
+    // Both capture groups are guaranteed present when `m` is non-null.
+    const depth = m[1]!.length as 2 | 3;
+    const text = m[2]!.trim();
     out.push({ text, id: slugifyHeading(text), depth });
   }
   return out;
