@@ -18,7 +18,7 @@ export function Masthead() {
         <Link href="/app" className="brand" aria-label="slopstock home">
           <span className="mark">
             <Image
-              src="/slopstock-glyph.png"
+              src="/slopstock-logo.png"
               alt=""
               width={28}
               height={28}

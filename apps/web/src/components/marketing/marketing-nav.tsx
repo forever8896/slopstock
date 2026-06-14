@@ -5,7 +5,7 @@ export function MarketingNav() {
   return (
     <header className="m-nav">
       <Link href="/" className="m-brand">
-        <Image src="/slopstock-glyph.png" alt="" width={24} height={24} priority />
+        <Image src="/slopstock-logo.png" alt="" width={24} height={24} priority />
         <span>slopstock</span>
       </Link>
       <nav className="m-nav-links">

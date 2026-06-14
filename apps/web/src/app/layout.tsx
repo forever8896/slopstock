@@ -52,7 +52,7 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  preload("/slopstock-glyph.png", { as: "image" });
+  preload("/slopstock-logo.png", { as: "image" });
   return (
     <html lang="en" className={`${mono.variable} ${fraunces.variable} ${hanken.variable}`}>
       <body>
