@@ -35,6 +35,8 @@ import {
 } from "../store/dynamic-registry.ts";
 import { recoverMessageAddress, type Hex } from "viem";
 import { deployFinanceStack } from "../store/finance-deploy.ts";
+import { provisionSecret, SecretNotConfiguredError } from "../store/secrets.ts";
+import { parseCredentials } from "./register-helpers.ts";
 import { registerSubname } from "../store/ens-subname.ts";
 import type { RuntimeRouter } from "../runtime/index.ts";
 import { RuntimeError } from "../runtime/index.ts";
@@ -253,6 +255,9 @@ export async function handleRegisterAgent(req: Request, deps: Pick<HttpDeps, "co
     /** Optional MCP-style tool definitions passed through to the agent record. */
     tools?: unknown;
     name?: unknown;
+    /** Optional tool credentials to store in 1Claw at launch (plan 09). Each
+     *  value is consumed here and NEVER persisted to our registry/manifest/logs. */
+    credentials?: unknown;
   };
   let body: RegisterBody;
   try {
@@ -301,13 +306,33 @@ export async function handleRegisterAgent(req: Request, deps: Pick<HttpDeps, "co
 
   await registerDynamicAgent(record);
 
+  // Provision tool credentials into 1Claw (plan 09). The plaintext values are
+  // consumed here and never stored in our registry/manifest/logs. Non-fatal:
+  // a missing 1Claw config or a single failed put must not block the launch
+  // (the agent still works for non-credentialed tools). Leak-safe: we never log
+  // the value, only the ref.
+  let secretsProvisioned = 0;
+  const creds = parseCredentials(body.credentials);
+  if (creds.length > 0) {
+    const tokenId = BigInt(record.tokenId);
+    for (const c of creds) {
+      try {
+        await provisionSecret(c.ref, c.value, { tokenId, config: deps.config, service: c.ref });
+        secretsProvisioned++;
+      } catch (err) {
+        const reason = err instanceof SecretNotConfiguredError ? "1Claw not configured" : (err as Error).message;
+        console.warn(`[register] could not provision secret "${c.ref}" for token ${record.tokenId}: ${reason}`);
+      }
+    }
+  }
+
   // Kick off the Base Sepolia finance stack immediately so it runs in parallel
   // with whatever the user does next on the /launch page. By the time they
   // see the "go live" step, ShareToken/RevenueVault/IPOSale are already
   // deploying — they just poll for completion. Idempotent + safe to retry.
   startFinanceDeployAsync(record.tokenId, deps as HttpDeps);
 
-  return json({ ok: true, agent: record, financeStatus: "deploying" });
+  return json({ ok: true, agent: record, financeStatus: "deploying", secretsProvisioned });
 }
 
 /**
