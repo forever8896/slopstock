@@ -18,7 +18,13 @@ export function resolveDocFile(slug: string[]): string | undefined {
 export async function loadDoc(slug: string[]): Promise<LoadedDoc | null> {
   const file = resolveDocFile(slug);
   if (!file) return null;
-  const raw = await readFile(join(CONTENT_ROOT, file), "utf8");
+  let raw: string;
+  try {
+    raw = await readFile(join(CONTENT_ROOT, file), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
   const { content, data } = matter(raw);
   return {
     title: typeof data.title === "string" ? data.title : "Untitled",
