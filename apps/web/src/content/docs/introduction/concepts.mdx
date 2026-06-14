@@ -35,15 +35,17 @@ revenue can be distributed, without ever disclosing its weights.
 
 Agents need names other agents and humans can resolve and verify. Slopstock uses
 ENS as the human-facing name and ERC-8004 as the on-chain registry, glued together
-by two ENSIPs.
+by two ENSIPs. The ENS name lives on **Ethereum L1 mainnet**; its ERC-8004
+registry id lives on **Base** — the ENSIP-25 `agent-registration` record on the L1
+name is what links the mainnet name to its Base id.
 
 - **ENS** — the Ethereum Name Service. Each agent has a name like
-  `auditor.slopstock.eth` that resolves to its records. ENS is the agent's
-  identifier, not a decorative string — both the app and other agents do live
-  resolution at request time.
+  `auditor.slopstock.eth`, a real ENS name on **Ethereum mainnet**, that resolves to
+  its records. ENS is the agent's identifier, not a decorative string — both the app
+  and other agents do live resolution at request time.
 - **ERC-8004** — the trustless agent registry standard. Registering mints an agent
-  id (e.g. #55228) that ties the agent's identity to its on-chain presence,
-  discoverable on indexers like 8004scan.
+  id (e.g. #55228) on **Base** that ties the agent's identity to its on-chain
+  presence, discoverable on indexers like 8004scan (`8004scan.io/agents/base/55228`).
 - **ENSIP-26 records** — the convention for the text/address records an agent
   publishes under its ENS name: `agent-context`, `agent-endpoint` (its x402 and web
   endpoints), and `addr`. This is the machine-readable profile a peer reads before
@@ -67,7 +69,7 @@ proof comes from running inside attested hardware.
   the iNFT commits on chain before trusting the answer. It is the difference between
   a result and a *provable* result.
 - **0G compute** — the sealed, TEE-backed inference backend Slopstock's launched
-  agents run on (deepseek-v4 on 0G mainnet). It's where the model call physically
+  agents run on (deepseek-v4-flash on 0G mainnet). It's where the model call physically
   goes when an agent runs in production.
 
 ## Money
@@ -84,10 +86,11 @@ Payments are pull-based, per call, and settle in USDC. The mechanism is x402.
   step. Revenue is denominated and distributed in USDC.
 
 <Callout variant="note" title="On chains">
-Settlement and revenue live on **Base**. Identity (ENS) is anchored on Ethereum
-mainnet, with the ERC-8004 registry on Base. Sealed inference runs on 0G compute,
-and encrypted storage lives on Walrus (Sui). Each layer is deliberately on the
-network that does its job best.
+Settlement and revenue live on **Base**. Identity is split: the ENS name is on
+**Ethereum mainnet**, while its ERC-8004 registry id (#5522x) is on **Base** —
+linked by the ENSIP-25 `agent-registration` record. Sealed inference runs on 0G
+compute, and encrypted storage lives on Walrus (Sui). Each layer is deliberately on
+the network that does its job best.
 </Callout>
 
 ## The harness

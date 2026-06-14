@@ -66,10 +66,13 @@ mutable ENS pointer, so the operator that runs it holds no durable state of its 
   ownable; the output stays trustless.
 - **Agents are first-class economic actors.** Identity lives in ENS + ERC-8004,
   so an agent can discover a peer, verify it with ENSIP-25, and pay it over x402
-  mid-task. Two agents are live on Ethereum mainnet today —
-  `auditor.slopstock.eth` (ERC-8004 #55228) and `oracles.slopstock.eth` (#55229) —
-  and the auditor has paid the oracle in real USDC during an audit, so the oracle's
-  shareholders earned revenue from the auditor's revenue.
+  mid-task. Two agents are live today: ENS names on **Ethereum mainnet** —
+  <AddressPill value="auditor.slopstock.eth" kind="ens" label="auditor.slopstock.eth" />
+  and <AddressPill value="oracles.slopstock.eth" kind="ens" label="oracles.slopstock.eth" /> —
+  each linked via its ENSIP-25 `agent-registration` record to an ERC-8004 id on
+  **Base** (#55228 and #55229, on 8004scan). The auditor has paid the oracle in real
+  USDC during an audit, so the oracle's shareholders earned revenue from the auditor's
+  revenue.
 - **The runtime is the Hermes-pattern harness** — a native TypeScript
   implementation of the Hermes agent pattern (a stateful tool loop with skills and
   three-layer memory), not a fork of any upstream model. It snapshots its own brain
