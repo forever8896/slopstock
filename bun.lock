@@ -63,6 +63,7 @@
         "@stratum/sdk": "workspace:*",
         "@stratum/shared": "workspace:*",
         "@tanstack/react-query": "^5.59.0",
+        "github-slugger": "^2.0.0",
         "gray-matter": "^4.0.3",
         "next": "^15.1.0",
         "next-mdx-remote": "^5.0.0",
