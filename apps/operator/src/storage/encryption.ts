@@ -12,7 +12,10 @@ import {
   generateKey,
   exportKeyToBase64,
 } from "./crypto.ts";
-import { SealCipher } from "./seal.ts";
+// NOTE: SealCipher (and its heavy @mysten/seal deps) is imported LAZILY inside
+// getSnapshotCipher — only when SNAPSHOT_ENCRYPTION=seal. This keeps operator boot
+// independent of Seal's transitive deps (e.g. @noble/curves resolution), so an aes
+// deploy can never be taken down by a Seal-side dependency issue.
 
 export interface SnapshotCipher {
   /** Encrypt plaintext → serialized envelope bytes (stored on Walrus). `id` scopes the agent (Seal identity). */
@@ -48,7 +51,10 @@ export class AesCipher implements SnapshotCipher {
  */
 export async function getSnapshotCipher(): Promise<SnapshotCipher> {
   const mode = process.env["SNAPSHOT_ENCRYPTION"] ?? "aes";
-  if (mode === "seal") return SealCipher.fromEnv();
+  if (mode === "seal") {
+    const { SealCipher } = await import("./seal.ts");
+    return SealCipher.fromEnv();
+  }
   const b64 = process.env["AGENT_SNAPSHOT_KEY"];
   if (b64) return AesCipher.fromBase64(b64);
   console.warn("[operator] AGENT_SNAPSHOT_KEY unset — using ephemeral key; snapshots will not survive restart");
