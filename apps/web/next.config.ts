@@ -35,6 +35,17 @@ const config: NextConfig = {
       "@react-native-async-storage/async-storage": false,
       "pino-pretty": false,
     };
+    // The Base-Account wallet (@base-org/account, statically pulled by RainbowKit's
+    // connectors barrel) ships its OWN nested viem+@scure+@noble/hashes@2.x, which
+    // is incompatible with the app's viem (@noble/hashes@1.x) → breaks the build
+    // (missing ./secp256k1, ./sha3, abytes). We don't use Base Account, so alias it
+    // (and @coinbase/cdp-sdk) to an empty module so it's never bundled.
+    cfg.resolve.alias = {
+      ...(cfg.resolve.alias ?? {}),
+      "@base-org/account": false,
+      "@coinbase/cdp-sdk": false,
+      "@coinbase/wallet-sdk": false,
+    };
     return cfg;
   },
 };
