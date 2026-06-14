@@ -1,9 +1,20 @@
 // apps/web/src/lib/docs/mdx-components.tsx
 import type { MDXComponents } from "mdx/types";
+import { Callout } from "@/components/docs/callout";
+import { Steps, Step } from "@/components/docs/steps";
+import { AddressPill } from "@/components/docs/address-pill";
+import { FlowDiagram } from "@/components/docs/flow-diagram";
+import { HarnessMatrix } from "@/components/docs/harness-matrix";
+import { SystemMap } from "@/components/docs/system-map";
+import { ContractCard } from "@/components/docs/contract-card";
 
-/**
- * Component map injected into every MDX doc. Standard HTML elements get
- * surface-docs prose styling via globals.css (.surface-docs .prose ...), so we
- * only need to register custom tags here. Bespoke figures are added in Task 17.
- */
-export const docsMdxComponents: MDXComponents = {};
+export const docsMdxComponents: MDXComponents = {
+  Callout,
+  Steps,
+  Step,
+  AddressPill,
+  FlowDiagram,
+  HarnessMatrix,
+  SystemMap,
+  ContractCard,
+};

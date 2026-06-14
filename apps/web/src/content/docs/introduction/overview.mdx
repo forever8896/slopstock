@@ -1,12 +1,41 @@
 ---
 title: Overview
-description: Slopstock protocol reference.
+description: Component smoke test (temporary).
 ---
 
-## Hello docs
+## Callouts
 
-This is a temporary overview page. Real content lands in Stage 3.
+<Callout variant="note" title="Note">A note callout.</Callout>
+<Callout variant="warn" title="Warning">A warning callout.</Callout>
+<Callout variant="onchain" title="On-chain">An on-chain callout with <AddressPill value="0x22dc3880000000000000000000000000000000000" kind="base" label="settle tx" />.</Callout>
 
-### A subheading
+## System map
 
-Body text for TOC verification.
+<SystemMap />
+
+## Harness matrix
+
+<HarnessMatrix />
+
+## A flow
+
+<FlowDiagram
+  title="example flow"
+  lanes={["user", "operator", "0G compute"]}
+  steps={[
+    { from: 0, to: 1, action: "POST /infer with x402 payment", note: "USDC on Base" },
+    { from: 1, to: 2, action: "run sealed inference", note: "TEE-attested" },
+    { from: 2, to: 0, action: "return signed receipt" },
+  ]}
+/>
+
+## A contract
+
+<ContractCard name="RevenueVault.sol" chain="Base" responsibility="Holds USDC, snapshots holders, distributes pro-rata." />
+
+## Steps
+
+<Steps>
+  <Step n={1} title="First">Do the first thing.</Step>
+  <Step n={2} title="Second">Then the second.</Step>
+</Steps>
