@@ -58,5 +58,19 @@ reinventing a vault — it's the **x402-native secrets layer** that already fits
 rails. 1Claw + Slopstock are complementary agent-economy infra.
 
 ## Status
-🟢 decided (this note). MVP (Tier 1) implements alongside the drill-cypher agent.
-Tier 2 (1Claw) = venue conversation + roadmap. See [[slopstock-nyc-buildplan]].
+🟢 decided + **Tier 2 (1Claw) BUILT & VERIFIED LIVE** (2026-06-14). We skipped the
+Tier-1 env MVP and went straight to 1Claw per the build call: the ElevenLabs key for
+drill-cypher resolves ONLY through 1Claw (no operator-env path).
+
+- `apps/operator/src/store/oneclaw.ts` — HSM client (verified-live contract: `1ck_`
+  direct Bearer / `ocv_` JWT-exchange+cache; PUT/GET/DELETE secrets; vault create/list).
+- `apps/operator/src/store/secrets.ts` — `resolveSecret(ref,{tokenId})` / `provisionSecret`,
+  per-agent path `agents/<tokenId>/<ref>`; leak guard (value never in errors/logs).
+- `ToolCtx.resolveSecret` wired in `hermes-loop.ts` → any Hermes credentialed tool uses it.
+- Live proof: `scripts/smoke-oneclaw.ts` (provision→resolve→delete) + `smoke-drill-cypher.ts`
+  (real 1Claw resolution inside the live pipeline). Vault `6c6f3acb-…` on api.1claw.xyz.
+- Config: `ONECLAW_API_KEY` (`1ck_`/`ocv_`), `ONECLAW_BASE_URL`, `ONECLAW_VAULT_ID`.
+
+Remaining: rotate the demo `1ck_` key before the booth (it passed through a transcript);
+`ocv_` per-agent keys + x402-metered reads (overage) are the platform-tier upside. Tier 3
+(TEE-sealed) partly realized by `SealCipher`. See [[slopstock-nyc-buildplan]].
