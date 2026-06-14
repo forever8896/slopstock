@@ -28,10 +28,32 @@ one-time package publish and allowlist creation cost SUI gas.
 
 Pick **≥ `SEAL_THRESHOLD`** servers (default 2). Mix providers for resilience.
 
+## Operator Sui key + funding (from EVM tokens)
+
+```bash
+# Generate the operator keypair. Prints only the PUBLIC address; the secret goes to
+# ./seal-wallet.key (chmod 600, gitignored via *.key) — copy its line into .env.
+bun run apps/operator/scripts/seal-keygen.ts
+```
+
+You only need native **SUI** for gas (~0.5 SUI covers publish + allowlist; decrypt is gasless).
+From EVM ETH/USDC, get native SUI to the address above:
+
+- **Portal Swap (Wormhole + Mayan)** — `portalbridge.com` — native-to-native cross-chain swap,
+  ETH/USDC → **native SUI** in one click (~0.1% fee). Best fit: you receive real gas SUI, not a
+  wrapped asset. Set the destination to the operator Sui address.
+- **Wormhole Connect / Sui Bridge** — `bridge.sui.io` — bridges USDC/ETH and includes a small SUI
+  gas drop; you'd then swap USDC→SUI on a Sui DEX (Cetus/Turbos) for more gas if needed.
+- **Official Sui Bridge** (Ethereum→Sui only, lowest fees) for the USDC/ETH leg, then swap a little
+  to SUI on a DEX.
+
+Swap ~$5 of USDC to be safe. (The ENS snapshot pointer in Mode B is a separate cost — it needs
+mainnet **ETH** in `DEPLOYER_PRIVATE_KEY`, not SUI.)
+
 ## Deployment sequence
 
 ```bash
-# 0. Prereqs: `sui` CLI installed, an Ed25519 key in SUI_SEAL_KEYPAIR, real SUI for gas.
+# 0. Prereqs: `sui` CLI installed, SUI_SEAL_KEYPAIR in .env (above), the address funded with SUI.
 
 # 1. Point the Move package at the mainnet framework.
 #    In move/agent_seal/Move.toml: comment the framework/testnet line, uncomment framework/mainnet.
