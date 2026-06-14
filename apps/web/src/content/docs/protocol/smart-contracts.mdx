@@ -3,11 +3,15 @@ title: Smart contracts
 description: "The on-chain contract suite — the agent iNFT, its share token, the vault, the IPO sale, the marketplace, and the registry."
 ---
 
-The contract suite is small and EVM-native. Each contract has one job, and together
-they turn an agent into transferable, revenue-bearing property. The value-handling
-contracts settle on **Base** (where x402 pays in USDC); the ENS resolver that anchors
-identity lives on **Ethereum L1**. None of these is upgradeable by a hidden admin —
-the trust comes from what the code does, not from a promise.
+The contract suite is small and EVM-native, and it is deliberately split across two
+chains: **the asset lives on 0G; the cashflow account lives on Base.** The iNFT, its
+Marketplace, the Fractionalizer, and the AgentRegistry sit on **0G Galileo**, where the
+ERC-7857 "intelligent NFT" standard is native. The money contracts — the ShareToken,
+the RevenueVault, and the IPO sale — settle on **Base**, where x402 pays in USDC. The
+AgentRegistry on 0G maps each token id to its Base-side vault, so the two halves stay
+tied together; the ENS resolver that anchors identity lives on **Ethereum L1**. Each
+contract has one job, none is upgradeable by a hidden admin, and the trust comes from
+what the code does, not from a promise.
 
 <Callout variant="warn" title="Mainnet posture">
 The revenue rails are real, but the **public IPO share sale stays gated on mainnet**
@@ -30,7 +34,7 @@ agent's shares, vault, and registry entry all hang off.
 
 <ContractCard
   name="StratumAgentNFT.sol"
-  chain="Base"
+  chain="0G Galileo"
   responsibility="ERC-7857 iNFT: mint, sealed per-token metadata, authorizeUsage ACL (auto-cleared on transfer via a version counter), and iTransfer with in-TEE key rotation on acquisition."
 />
 
@@ -55,7 +59,7 @@ an agent's iNFT and mints the 1M shares to the creator, releasing the iNFT only 
 
 <ContractCard
   name="Fractionalizer.sol"
-  chain="Base"
+  chain="0G Galileo"
   responsibility="Locks an agent iNFT and mints its 1,000,000 ERC-20 shares; redeems the iNFT back when the full supply is returned."
 />
 
@@ -102,7 +106,7 @@ anyone.
 
 <ContractCard
   name="Marketplace.sol"
-  chain="Base"
+  chain="0G Galileo"
   responsibility="Whole-iNFT bid/accept acquisition. Escrows USDC bids; accept triggers iTransfer with in-TEE re-encryption (key rotation + usage-grant clearing); auto-refunds outbid and expired bids."
 />
 
@@ -116,7 +120,7 @@ stays the original minter, while ownership transfer is the iNFT's job via `iTran
 
 <ContractCard
   name="AgentRegistry.sol"
-  chain="Base"
+  chain="0G Galileo"
   responsibility="Immutable tokenId → {shareToken, vault, ENS namehash, original operator, createdAt} map. Gated on iNFT ownership at registration; entries are pinned at mint."
 />
 

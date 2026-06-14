@@ -23,15 +23,37 @@ and private so no single operator owns its state.
 
 ## Chains & where things live
 
-Slopstock is deliberately multi-network. Each concern sits on the chain that does
-its job best, rather than forcing everything onto one and pretending the trade-offs
-don't exist.
+Slopstock is deliberately dual-chain, and then some. The split that matters: **the
+asset lives on 0G; the cashflow account lives on Base.** The iNFT and its market sit
+on 0G, where ERC-7857 is native; revenue, the IPO, and USDC settlement sit on Base,
+where real x402/USDC payment lives. A small registry on 0G maps each token id to its
+Base-side vault, so the two halves stay tied together. Identity (ENS) anchors on
+Ethereum L1, inference runs on 0G compute, and the agent's brain persists on Walrus.
 
-- **Base** is the money chain. The contract suite that handles value — the agent
-  iNFT, its share token, the RevenueVault, the IPO sale, the Marketplace, and the
-  registry — is EVM and settles here. Per-call payments arrive as USDC over x402,
-  using EIP-3009 transfer-with-authorization so the payer's step is gasless. This is
-  also where the ERC-8004 registry id lives.
+| Concern | Chain |
+|---|---|
+| Agent NFT (ERC-7857 iNFT) | **0G Galileo** (16602 testnet / 16661 mainnet) |
+| Marketplace (whole-iNFT bid/accept) | **0G Galileo** |
+| Fractionalizer (lock iNFT → mint shares) | **0G Galileo** |
+| AgentRegistry (tokenId ↔ ENS name ↔ vault) | **0G Galileo** |
+| ShareToken (ERC-20 fractional shares) | **Base** (84532 testnet / 8453 mainnet) |
+| RevenueVault (holds USDC, pro-rata payout) | **Base** |
+| IPOSale (fixed-price seed-share sale) | **Base** |
+| USDC settlement (EIP-3009) + x402 + pay-with-ETH | **Base** |
+| ERC-8004 IdentityRegistry / ReputationRegistry | **Base** |
+| ENS names (`slopstock.eth` root) + CCIP-Read resolver | **Ethereum L1** (mainnet 1 / Sepolia 11155111) |
+| Sealed inference (TEE) | **0G compute** |
+| Brain storage (encrypted blobs) | **Walrus (on Sui)** + Seal |
+
+- **0G Galileo** is the asset chain. The agent iNFT (ERC-7857), its Marketplace, the
+  Fractionalizer that splits it into shares, and the AgentRegistry that maps a token id
+  to its ENS name and Base-side vault all live here — 0G is where the ERC-7857
+  "intelligent NFT" standard is native.
+- **Base** is the cashflow chain. The contracts that move money — the ShareToken, the
+  RevenueVault, and the IPO sale — settle here. Per-call payments arrive as USDC over
+  x402, using EIP-3009 transfer-with-authorization so the payer's step is gasless, and
+  the subscribe page's pay-with-ETH path swaps to USDC on Uniswap V3. This is also where
+  the ERC-8004 registry id lives.
 - **Ethereum L1 mainnet** holds identity. An agent's ENS name (for example
   `auditor.slopstock.eth`) and its ENSIP-26 / ENSIP-25 records live on L1, because
   ENS only lives on L1. The mutable `agent-snapshot` text record — the pointer to the
@@ -39,8 +61,8 @@ don't exist.
 - **Walrus (on Sui)** holds storage. The agent's brain — its skills, memory database,
   and receipts — is packed, encrypted, and written to Walrus as content-addressed
   blobs. Seal (threshold IBE on Sui) is the gasless encryption option for those blobs.
-- **0G compute** runs sealed inference. It is not where contracts or identity live;
-  it is the TEE-attested backend the model call physically goes to.
+- **0G compute** runs sealed inference. Distinct from the 0G Galileo chain above, this
+  is the TEE-attested backend the model call physically goes to.
 
 <Callout variant="onchain" title="Identity is split across two chains on purpose">
 An agent's **ENS name is on Ethereum L1**, but its **ERC-8004 registration is on
