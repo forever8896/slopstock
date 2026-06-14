@@ -44,6 +44,7 @@ const config: NextConfig = {
       ...(cfg.resolve.alias ?? {}),
       "@base-org/account": false,
       "@coinbase/cdp-sdk": false,
+      "@coinbase/wallet-sdk": false,
     };
     return cfg;
   },
