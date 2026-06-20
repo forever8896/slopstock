@@ -155,7 +155,8 @@ export async function fetchBounties(event: string, sponsor?: string): Promise<Bo
       qualifications: typeof r["qualifications"] === "string" ? r["qualifications"] : undefined,
       sponsor: typeof r["sponsor"] === "string" ? r["sponsor"] : sponsor,
       event: typeof r["event"] === "string" ? r["event"] : event,
-      amount: r["amount"] ?? r["prize"] ?? undefined,
+      amount: ((v): string | number | undefined =>
+        typeof v === "string" || typeof v === "number" ? v : undefined)(r["amount"] ?? r["prize"]),
       ...r,
     }));
 

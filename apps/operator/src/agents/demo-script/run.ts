@@ -15,7 +15,7 @@ process.env["NODE_TLS_REJECT_UNAUTHORIZED"] ??= "0";
 import { ethers } from "ethers";
 import { createZGComputeNetworkBroker } from "@0gfoundation/0g-compute-ts-sdk";
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 
 import { DEMO_SCRIPT_SYSTEM_PROMPT } from "@stratum/shared";
 import { digestRepo, estimateTokens } from "./repo-digest.ts";
@@ -133,16 +133,16 @@ export async function runDemoScript(input: DemoScriptInput): Promise<DemoScriptR
     const client = new OpenAI({
       baseURL: meta.endpoint as string,
       apiKey: "",
-      defaultHeaders: headers as Record<string, string>,
+      defaultHeaders: headers as unknown as Record<string, string>,
     });
 
-    const res = await client.chat.completions.create({
+    const res = (await client.chat.completions.create({
       model: meta.model as string,
       messages,
       tools,
       tool_choice: "auto",
       max_tokens: 2048,
-    } as Parameters<typeof client.chat.completions.create>[0]);
+    } as Parameters<typeof client.chat.completions.create>[0])) as ChatCompletion;
 
     const usage = res.usage;
     if (usage) {

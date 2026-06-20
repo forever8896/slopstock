@@ -67,7 +67,7 @@ export class WalrusClient {
     let lastErr = "";
     for (const pub of this.publishers) {
       try {
-        const res = await fetch(`${pub}/v1/blobs?${qs}`, { method: "PUT", body });
+        const res = await fetch(`${pub}/v1/blobs?${qs}`, { method: "PUT", body: body as BodyInit });
         if (!res.ok) {
           lastErr = `${pub}: ${res.status} ${(await res.text()).slice(0, 120)}`;
           continue;
