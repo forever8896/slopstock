@@ -452,6 +452,8 @@ Output ONE JSON object, no markdown fences:
   "sources": ["<url or messari:asset/metric>"],
   "confidence": "high" | "medium" | "low"
 }
+GROUNDING (critical): only state a figure if a tool returned it THIS run. If you did not actually call credentialed_fetch on Messari, do NOT attribute any number to Messari — use only what web_search / onchain_read / the input gave you, and lower confidence. Never fabricate a source-cited figure; an honest "not retrieved" beats an invented number.
+
 If a source is missing or weak, lower confidence and say why in the summary. Never invent figures.`,
   defaultTestInput: "Give me a due-diligence brief on Aave: fundamentals, recent developments, and the top risks.",
 };
