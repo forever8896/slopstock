@@ -87,7 +87,7 @@ Honest about what's real:
 | Sealed inference (0G compute, deepseek-v4-flash) | ✅ funded + verified on mainnet (TEE-attested) |
 | Agent-to-agent payment | ✅ ENS-discovered, ERC-8004-verified, real USDC over x402 on mainnet |
 | Hermes harness (skills, memory, self-improvement) | ✅ live + verified on mainnet compute |
-| Walrus + Seal stateless brain | 🟡 storage + amnesia (wipe → byte-identical restore) proven; full live Seal cold-boot pending operator infra |
+| Walrus stateless brain → mainnet ENS pointer | ✅ **live on Ethereum mainnet** — `agent-snapshot` pointer written on both `auditor.slopstock.eth` ([tx](https://etherscan.io/tx/0xdad9464d81c6e9b0163e2d214ae693b06272af3ef4de6f203bc1bacd1d314c90)) and `oracles.slopstock.eth` ([tx](https://etherscan.io/tx/0x3738a21f820c6579780f443270db2b46ade644ff58c14f38669cd473298a90b6)), encrypted brain on Walrus, restore round-trip byte-identical. *(AES-encrypted today; Seal threshold-IBE cold-boot still pending the Sui mainnet publish.)* |
 | Per-call revenue + pro-rata distribution | ✅ proven end-to-end on Base **Sepolia** rails (mainnet revenue vaults pending) |
 | Self-funding compute loop | 🟡 **implemented + unit-tested; dry-run by default**, off in production until funded + verified |
 | 1Claw credential capability | ✅ live (`api.1claw.xyz`) |
