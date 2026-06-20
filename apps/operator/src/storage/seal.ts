@@ -59,8 +59,25 @@ export class SealCipher implements SnapshotCipher {
     const objectIds = resolveKeyServerIds(network, process.env["SEAL_KEY_SERVERS"]);
     const verifyKeyServers = resolveVerifyKeyServers(network, process.env["SEAL_VERIFY_KEY_SERVERS"]);
 
+    // Mainnet has no free open-mode key servers — you authenticate to a
+    // provider's permissioned server, or to a committee server via an
+    // aggregator (e.g. Enoki: object 0x686098f1…012a7595, aggregator
+    // https://seal-aggregator-mainnet.mystenlabs.com). These are applied to
+    // every configured server; for the committee path use a SINGLE objectId in
+    // SEAL_KEY_SERVERS with SEAL_THRESHOLD=1 (the 5-of-8 is internal to the
+    // aggregator). All three are optional and ignored when unset (open mode).
+    const apiKey = process.env["SEAL_API_KEY"] || undefined;
+    const apiKeyName = process.env["SEAL_API_KEY_NAME"] || undefined;
+    const aggregatorUrl = process.env["SEAL_AGGREGATOR_URL"] || undefined;
+
     const suiClient = new SuiJsonRpcClient({ network, url: getJsonRpcFullnodeUrl(network) });
-    const serverConfigs = objectIds.map((objectId) => ({ objectId, weight: 1 }));
+    const serverConfigs = objectIds.map((objectId) => ({
+      objectId,
+      weight: 1,
+      ...(apiKey ? { apiKey } : {}),
+      ...(apiKeyName ? { apiKeyName } : {}),
+      ...(aggregatorUrl ? { aggregatorUrl } : {}),
+    }));
     const client = new SealClient({ suiClient, serverConfigs, verifyKeyServers });
 
     let keypair: Ed25519Keypair;
