@@ -73,7 +73,7 @@ function startMockRpcServer(
     /** ABI-encoded return value (hex) */
     result: string;
   }>
-): { server: Server; url: string } {
+): { server: Server<undefined>; url: string } {
   const server = Bun.serve({
     port: 0, // random available port
     async fetch(req) {

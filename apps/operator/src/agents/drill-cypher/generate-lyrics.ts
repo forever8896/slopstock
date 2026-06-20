@@ -96,8 +96,8 @@ function makeDefault0gInfer(providerAddress: `0x${string}`): InferFn {
     try { await broker.inference.acknowledgeProviderSigner(providerAddress); } catch { /* already acked */ }
     const meta = await broker.inference.getServiceMetadata(providerAddress);
     const headers = await broker.inference.getRequestHeaders(providerAddress, user.slice(0, 100));
-    const client = new OpenAI({ baseURL: meta.endpoint as string, apiKey: "", defaultHeaders: headers as Record<string, string> });
-    const res = await client.chat.completions.create({
+    const client = new OpenAI({ baseURL: meta.endpoint as string, apiKey: "", defaultHeaders: headers as unknown as Record<string, string> });
+    const res = (await client.chat.completions.create({
       model: meta.model as string,
       messages: [
         { role: "system", content: system },
@@ -105,7 +105,9 @@ function makeDefault0gInfer(providerAddress: `0x${string}`): InferFn {
       ],
       temperature: 0.9,
       max_tokens: 1200,
-    } as Parameters<typeof client.chat.completions.create>[0]);
+    } as Parameters<typeof client.chat.completions.create>[0])) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+    };
     return res.choices?.[0]?.message?.content ?? "";
   };
 }

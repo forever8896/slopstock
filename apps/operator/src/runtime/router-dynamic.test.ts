@@ -73,6 +73,8 @@ function makeConfig(dataDir: string): OperatorConfig {
     SEAL_THRESHOLD: 2,
     SUI_SEAL_KEYPAIR: "",
     SEAL_KEY_SERVERS: "",
+    SEAL_VERIFY_KEY_SERVERS: "",
+    ONECLAW_BASE_URL: "https://api.1claw.xyz",
   };
 }
 

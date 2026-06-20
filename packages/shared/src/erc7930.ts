@@ -249,7 +249,10 @@
  *   logical structure.
  */
 
-export type Hex = `0x${string}`;
+// `Hex` is defined and exported once in ./addresses (and re-exported from the
+// package index). Import it for internal use only — re-exporting it here too
+// would make `Hex` ambiguous through index.ts's two `export *` lines.
+import type { Hex } from "./addresses";
 
 /** Chain type constants (ERC-7930 Table 1). */
 export const CHAIN_TYPE_EIP155 = 0x0001; // EVM / EIP-155

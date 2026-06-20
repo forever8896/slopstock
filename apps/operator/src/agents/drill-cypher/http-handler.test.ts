@@ -18,6 +18,7 @@ const mockNet: NetworkConfig = {
 const mockFacilitatorRequirePayment: FacilitatorClient = {
   verify: async (_p: PaymentPayload, _r: PaymentRequirements): Promise<VerifyResponse> => ({ isValid: false, invalidReason: "no payment" }),
   settle: async (_p: PaymentPayload, _r: PaymentRequirements): Promise<SettleResponse> => ({ success: false, transaction: "", errorReason: "not settled" } as SettleResponse),
+  getSupported: async () => ({ kinds: [], extensions: [], signers: {} }),
 };
 
 function makeRequest(body: unknown, headers: Record<string, string> = {}): Request {

@@ -42,6 +42,7 @@ const mockFacilitatorRequirePayment: FacilitatorClient = {
   settle: async (_payload: PaymentPayload, _reqs: PaymentRequirements): Promise<SettleResponse> => {
     return { success: false, transaction: "", errorReason: "not settled" } as SettleResponse;
   },
+  getSupported: async () => ({ kinds: [], extensions: [], signers: {} }),
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

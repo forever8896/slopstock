@@ -16,7 +16,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { OperatorConfig } from "../config.ts";
 import { getZGBroker } from "../runtime/llm-backend.ts";
 import { runTopupCheck, type TopupConfig, type TopupDeps } from "./topup.ts";
-import { LiveTopupExecutor, readLedgerOg, readUsdcBalance } from "./executor.ts";
+import { LiveTopupExecutor, readLedgerOg, readUsdcBalance, resolveChainConfig } from "./executor.ts";
 import { SpendLog } from "./spend-log.ts";
 
 const HOUR_MS = 3_600_000;
@@ -45,17 +45,21 @@ export function startSelfFundingScheduler(config: OperatorConfig): SchedulerHand
   const firstDelayMs = Math.max(0, Number(process.env.SELF_FUND_FIRST_DELAY_S ?? "120")) * 1000;
   const dryRun = process.env.SELF_FUND_DRY_RUN !== "0";
 
+  // The funding loop runs on its own self-consistent chain config (mainnet by
+  // default), decoupled from the app-wide BASE_RPC_URL which targets Base
+  // Sepolia for x402/finance. Pick the network/RPC with SELF_FUND_* env.
+  const chain = resolveChainConfig(process.env);
+
   const tick = async () => {
     try {
       const account = privateKeyToAccount(key);
-      const baseRpcUrl = process.env.BASE_RPC_URL ?? "https://mainnet.base.org";
-      const base = createPublicClient({ transport: http(baseRpcUrl) });
+      const base = createPublicClient({ transport: http(chain.baseRpcUrl) });
       const broker = await getZGBroker(config);
       const spendLog = new SpendLog(
         process.env.SELF_FUND_SPEND_LOG ?? `${config.AGENTS_DATA_DIR}/self-fund-spend.json`,
       );
       const executor = new LiveTopupExecutor({
-        baseRpcUrl, account, broker,
+        chain, account, broker,
         slippageBps: Number(process.env.SELF_FUND_SLIPPAGE_BPS ?? "100"),
       });
 
@@ -71,7 +75,7 @@ export function startSelfFundingScheduler(config: OperatorConfig): SchedulerHand
       const deps: TopupDeps = {
         ledger: { readLedgerOg: () => readLedgerOg(broker) },
         store: {
-          getReserveUsdc: () => readUsdcBalance(base, account.address),
+          getReserveUsdc: () => readUsdcBalance(base, account.address, chain.usdc),
           getSpentTodayUsdc: (now) => spendLog.spentToday(now),
           debitReserveUsdc: async () => {}, // reserve is the live USDC balance; the swap debits it
           recordSpendUsdc: (amount, now) => spendLog.record(amount, now),
@@ -87,7 +91,7 @@ export function startSelfFundingScheduler(config: OperatorConfig): SchedulerHand
     }
   };
 
-  console.log(`[self-fund] scheduler armed — every ${intervalHours}h, dryRun=${dryRun}, first run in ${firstDelayMs / 1000}s`);
+  console.log(`[self-fund] scheduler armed — net=${chain.network} (base ${chain.baseChainId}→0G ${chain.ogChainId}), every ${intervalHours}h, dryRun=${dryRun}, first run in ${firstDelayMs / 1000}s`);
   const first = setTimeout(() => void tick(), firstDelayMs);
   const interval = setInterval(() => void tick(), intervalMs);
   // Don't let the timers keep the event loop alive on their own.
