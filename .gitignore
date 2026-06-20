@@ -103,3 +103,7 @@ seal-mainnet-deploy.txt
 move/agent_seal/build/
 move/agent_seal/Move.lock
 move/agent_seal/Published.toml
+
+# Seal key server local secrets
+seal-keyserver/.genkey.*
+*.master-key

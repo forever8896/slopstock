@@ -11,5 +11,9 @@ node_url: https://fullnode.mainnet.sui.io:443
 
 # Open mode: serves Seal policies for ANY package (incl. our agent_seal policy
 # package 0x138e…). Simplest for a single self-hosted server.
+# NOTE: use the PARENT KeyServer object id (type …::key_server::KeyServer),
+# NOT the dynamic-field child (…dynamic_field::Field<u64, KeyServerV2>) the tx
+# also creates. register-key-server.ts prints the correct (parent) id.
 server_mode: !Open
-  key_server_object_id: '0xREPLACE_WITH_ID_FROM_register-key-server.ts'
+  key_server_object_id: '0xb7208d6360c04f9c886385ccfa01a3f38072205e385a73e26ca1b4a4a6acceb0'
+

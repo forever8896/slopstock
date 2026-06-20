@@ -75,8 +75,16 @@ const res = await client.signAndExecuteTransaction({
 });
 console.log("status:", res.effects?.status?.status, "digest:", res.digest);
 
+// Pick the PARENT KeyServer object (type ends in ::key_server::KeyServer).
+// NOT the dynamic-field child (0x2::dynamic_field::Field<u64, …::KeyServerV2>),
+// whose type merely *contains* "key_server::KeyServer" as a prefix — that child
+// is what the SDK resolves *from* the parent, so registering it is wrong.
 const created = (res.objectChanges ?? []).find(
-  (c) => c.type === "created" && typeof c.objectType === "string" && c.objectType.includes("::key_server::KeyServer"),
+  (c) =>
+    c.type === "created" &&
+    typeof c.objectType === "string" &&
+    /::key_server::KeyServer$/.test(c.objectType) &&
+    !c.objectType.startsWith("0x2::dynamic_field::"),
 ) as { objectId?: string } | undefined;
 
 if (created?.objectId) {
