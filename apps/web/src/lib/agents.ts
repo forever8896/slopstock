@@ -242,8 +242,13 @@ function buildRealAgentMeta(dyn: DynamicAgentRecord): AgentDetail["realAgent"] |
 }
 
 export async function listAgents(): Promise<Array<AgentSummary | DynamicAgentSummary>> {
+  // Hide deprecated seed agents (the pre-v2 testnet demos AUDIT/MEMER/ORCL).
+  // They stay on-chain + resolvable by direct URL, but never appear in listings.
+  const liveTickers = Object.keys(BASE_SEPOLIA_AGENTS).filter(
+    (t) => !AGENT_METADATA[t.toUpperCase()]?.deprecated,
+  );
   const [staticAgents, dynamic] = await Promise.all([
-    Promise.all(Object.keys(BASE_SEPOLIA_AGENTS).map(loadAgentSummary)),
+    Promise.all(liveTickers.map(loadAgentSummary)),
     listDynamicAgentSummaries(),
   ]);
   return [...staticAgents, ...dynamic];
