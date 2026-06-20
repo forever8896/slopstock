@@ -1,0 +1,15 @@
+# Seal key-server config — MAINNET, Open mode (self-hosted independent server).
+# Used by the seal `key-server` binary (MystenLabs/seal). Pair with:
+#   MASTER_KEY=<secret from `seal-cli genkey`>   (env, NEVER commit)
+#   CONFIG_PATH=/config/key-server-config.mainnet.yaml
+#
+# Fill key_server_object_id with the id printed by register-key-server.ts.
+
+network: Mainnet
+# Optional custom RPC (else a default mainnet fullnode is used):
+node_url: https://fullnode.mainnet.sui.io:443
+
+# Open mode: serves Seal policies for ANY package (incl. our agent_seal policy
+# package 0x138e…). Simplest for a single self-hosted server.
+server_mode: !Open
+  key_server_object_id: '0xREPLACE_WITH_ID_FROM_register-key-server.ts'
