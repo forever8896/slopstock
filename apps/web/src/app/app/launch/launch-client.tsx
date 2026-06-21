@@ -616,41 +616,64 @@ function IdentityStep(props: {
 
           {/* Tool credentials → 1Claw (never in the manifest or model context). */}
           <div className="ss-field">
-            <label>tool credentials · stored in 1Claw</label>
-            <div className="help" style={{ marginTop: -2, marginBottom: 8 }}>
-              keys for any API your tools call (e.g. <code>elevenlabs</code>). stored in 1Claw&apos;s HSM at
-              launch, fetched just-in-time — <b style={{ color: "var(--fg-2)" }}>never</b> in the manifest,
-              model context, or receipt.
+            <label>tool credentials · optional</label>
+            <div className="help" style={{ marginTop: -2 }}>
+              API keys your agent&apos;s tools need (e.g. a <code>messari</code> or <code>elevenlabs</code> key).
+              Saved to <b style={{ color: "var(--fg-2)" }}>1Claw&apos;s cloud&#8209;HSM</b> at launch and fetched
+              just&#8209;in&#8209;time at the tool layer — <b style={{ color: "var(--fg-2)" }}>never</b> placed in the
+              model&apos;s context, the manifest, or receipts.
             </div>
-            <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "grid", gap: 10, marginTop: 6 }}>
+              {credentials.length === 0 ? (
+                <div className="help" style={{ fontStyle: "italic" }}>
+                  none yet — add one only if a tool calls a private/paid API.
+                </div>
+              ) : null}
               {credentials.map((c, i) => (
-                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input
-                    value={c.ref}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setCredentials((arr) => arr.map((x, j) => (j === i ? { ...x, ref: v } : x)));
-                    }}
-                    placeholder="ref · e.g. elevenlabs"
-                    style={{ flex: "0 0 200px", background: "#0a0a0a", border: "1px solid var(--hair)", padding: "8px 10px", color: "var(--fg)", fontSize: 14, borderRadius: 2, fontFamily: "inherit" }}
-                  />
-                  <input
-                    type="password"
-                    value={c.value}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setCredentials((arr) => arr.map((x, j) => (j === i ? { ...x, value: v } : x)));
-                    }}
-                    placeholder="api key · write-only, sent to 1Claw"
-                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid var(--hair)", padding: "8px 10px", color: "var(--fg)", fontSize: 14, borderRadius: 2, fontFamily: "inherit" }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setCredentials((arr) => arr.filter((_, j) => j !== i))}
-                    style={{ border: "1px solid rgba(239,68,68,0.4)", color: "var(--red)", padding: "6px 10px", borderRadius: 2, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}
-                  >
-                    ✕
-                  </button>
+                <div key={i} className="cred-card">
+                  <div className="cred-grid">
+                    <div>
+                      <span className="ss-cap">name</span>
+                      <input
+                        className="ss-input"
+                        value={c.ref}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCredentials((arr) => arr.map((x, j) => (j === i ? { ...x, ref: v } : x)));
+                        }}
+                        placeholder="messari"
+                      />
+                    </div>
+                    <div>
+                      <span className="ss-cap">secret key · write-only</span>
+                      <input
+                        className="ss-input"
+                        type="password"
+                        value={c.value}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCredentials((arr) => arr.map((x, j) => (j === i ? { ...x, value: v } : x)));
+                        }}
+                        placeholder="paste the API key"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="cred-del"
+                      onClick={() => setCredentials((arr) => arr.filter((_, j) => j !== i))}
+                    >
+                      remove
+                    </button>
+                  </div>
+                  <div className="cred-path">
+                    {c.ref.trim() ? (
+                      <>your prompt references it by <code>{c.ref.trim()}</code> · vaulted at{" "}
+                      <code>agents/&lt;id&gt;/{c.ref.trim()}</code></>
+                    ) : (
+                      <>the <b style={{ color: "var(--fg-2)" }}>name</b> is the ref your system prompt passes to{" "}
+                      <code>credentialed_fetch</code>.</>
+                    )}
+                  </div>
                 </div>
               ))}
               <div>
@@ -680,35 +703,45 @@ function IdentityStep(props: {
           </button>
           {showSkillsEditor ? (
             <div style={{ display: "grid", gap: 10 }}>
+              <div className="help" style={{ marginTop: -2 }}>
+                Skills are markdown playbooks bundled with the agent — reusable know&#8209;how it consults while
+                working. Optional: Hermes also <b style={{ color: "var(--fg-2)" }}>writes its own</b> as it
+                completes tasks, so you can launch with none.
+              </div>
               {customSkills.map((sk, i) => (
-                <div key={i} style={{ border: "1px solid var(--hair-2)", padding: 10, borderRadius: 2 }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-                    <input
-                      value={sk.name}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setCustomSkills((arr) => arr.map((s, j) => (j === i ? { ...s, name: v } : s)));
-                      }}
-                      placeholder="skill-name"
-                      style={{ flex: 1, background: "#0a0a0a", border: "1px solid var(--hair)", padding: "6px 10px", color: "var(--fg)", fontSize: 14, borderRadius: 2, fontFamily: "inherit" }}
-                    />
+                <div key={i} className="cred-card">
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <span className="ss-cap">skill name</span>
+                      <input
+                        className="ss-input"
+                        value={sk.name}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCustomSkills((arr) => arr.map((s, j) => (j === i ? { ...s, name: v } : s)));
+                        }}
+                        placeholder="reentrancy-checks"
+                      />
+                    </div>
                     <button
                       type="button"
+                      className="cred-del"
                       onClick={() => setCustomSkills((arr) => arr.filter((_, j) => j !== i))}
-                      style={{ border: "1px solid rgba(239,68,68,0.4)", color: "var(--red)", padding: "2px 8px", borderRadius: 2, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}
                     >
-                      ✕
+                      remove
                     </button>
                   </div>
+                  <span className="ss-cap">body · markdown</span>
                   <textarea
+                    className="ss-input"
                     value={sk.body}
                     onChange={(e) => {
                       const v = e.target.value;
                       setCustomSkills((arr) => arr.map((s, j) => (j === i ? { ...s, body: v } : s)));
                     }}
                     spellCheck={false}
-                    className="req"
-                    style={{ minHeight: 100, fontSize: 13 }}
+                    placeholder={"## when to use\n…\n## steps\n1. …"}
+                    style={{ minHeight: 100, fontSize: 13, resize: "vertical" }}
                   />
                 </div>
               ))}
