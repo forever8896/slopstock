@@ -23,11 +23,13 @@ export default async function AgentDetailPage({ params }: PageProps) {
   const agent = await loadAgentDetail(ticker.toUpperCase());
   if (!agent) notFound();
 
+  // Resilient: a flaky/archive-gated public RPC (eth_getLogs over a wide range)
+  // must never 500 the whole page — each panel degrades to empty on failure.
   const [holders, snapshots, inferences, ensVerification] = await Promise.all([
-    loadHolders(agent.ticker),
-    loadSnapshots(agent.ticker),
-    loadInferences(agent.ticker),
-    verifyEns(agent.ens, agent.contracts.vault),
+    loadHolders(agent.ticker).catch(() => []),
+    loadSnapshots(agent.ticker).catch(() => []),
+    loadInferences(agent.ticker).catch(() => []),
+    verifyEns(agent.ens, agent.contracts.vault).catch(() => ({ ok: false as const, reason: "rpc-error" as const })),
   ]);
   const lastDistribution = snapshots[0];
   const marketCap = (agent.ipo.totalSupply * agent.ipo.pricePerShareUsdc) / 10n ** 18n;
@@ -115,8 +117,8 @@ export default async function AgentDetailPage({ params }: PageProps) {
 
           <div className="agent-attest-grid">
             <div>
-              <div className="l">tee measurement</div>
-              <div className="v acc">{shortAddr(agent.expectedTeeMeasurement, 8)}</div>
+              <div className="l">tee attestation</div>
+              <div className="v acc">{teeLabel(agent.expectedTeeMeasurement)}</div>
             </div>
             <div>
               <div className="l">attestation signer</div>
@@ -270,7 +272,7 @@ export default async function AgentDetailPage({ params }: PageProps) {
             <KvRow k="vault" v={addrOrNone(agent.contracts.vault, "not issued")} />
             <KvRow k="ipo sale" v={addrOrNone(agent.contracts.ipoSale, "not issued")} />
             <KvRow k="runtime" v={agent.modelBase} />
-            <KvRow k="tee meas." v={addrOrNone(agent.expectedTeeMeasurement, "pending first call", 8)} accent />
+            <KvRow k="tee attest." v={teeLabel(agent.expectedTeeMeasurement)} accent />
             <KvRow k="x402 endpoint" v={`/x402/infer?tokenId=${agent.tokenId} · ${agent.perCallHuman}`} />
             <KvRow k="ens" v={`${agent.ens} · subnames open`} />
           </div>
@@ -330,6 +332,12 @@ function KvRow({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
  *  (so un-deployed contracts read as intentional, not as a broken 0x000…000). */
 function addrOrNone(addr: string, label = "not set", chars = 6): string {
   return /^0x0+$/i.test(addr) ? `— ${label}` : shortAddr(addr as `0x${string}`, chars);
+}
+
+/** 0G TeeML attests via a signed Intel-TDX quote, not an MRENCLAVE hash — so a
+ *  zero "measurement" is honest. Show the attestation kind instead of 0x000…. */
+function teeLabel(m: string): string {
+  return /^0x0+$/i.test(m) ? "0G TeeML · intel-tdx" : shortAddr(m as `0x${string}`, 8);
 }
 
 function pctNum(num: bigint, den: bigint): number {
