@@ -1,6 +1,6 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { rainbowWallet, metaMaskWallet, walletConnectWallet, injectedWallet } from "@rainbow-me/rainbowkit/wallets";
-import { baseSepolia, sepolia } from "wagmi/chains";
+import { base, baseSepolia, sepolia } from "wagmi/chains";
 import { http, fallback, type Chain } from "viem";
 
 /**
@@ -31,8 +31,9 @@ export const wagmiConfig = getDefaultConfig({
   wallets: [
     { groupName: "Popular", wallets: [rainbowWallet, metaMaskWallet, walletConnectWallet, injectedWallet] },
   ],
-  chains: [zgGalileo, baseSepolia, sepolia],
+  chains: [base, zgGalileo, baseSepolia, sepolia],
   transports: {
+    [base.id]: fallback([http("https://mainnet.base.org"), http()]),
     [zgGalileo.id]: http(),
     [baseSepolia.id]: fallback([
       http("https://base-sepolia-rpc.publicnode.com"),

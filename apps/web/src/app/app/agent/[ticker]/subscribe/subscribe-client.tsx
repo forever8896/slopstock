@@ -5,12 +5,12 @@ import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
   useChainId,
+  usePublicClient,
   useReadContract,
   useSwitchChain,
   useWalletClient,
 } from "wagmi";
 import { base } from "wagmi/chains";
-import { publicActions } from "viem";
 import { erc20Abi } from "@stratum/contracts-types";
 import { x402Client } from "@x402/core/client";
 import { ExactEvmScheme } from "@x402/evm";
@@ -39,6 +39,7 @@ export function SubscribeClient({ agent }: Props) {
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
   const { data: walletClient } = useWalletClient({ chainId: BASE_CHAIN_ID });
+  const publicClient = usePublicClient({ chainId: BASE_CHAIN_ID });
   const onBase = chainId === BASE_CHAIN_ID;
 
   const [input, setInput] = useState(
@@ -91,7 +92,7 @@ export function SubscribeClient({ agent }: Props) {
       );
       return;
     }
-    if (!walletClient) {
+    if (!walletClient || !publicClient) {
       setErrorMsg("wallet not ready — reconnect and try again");
       return;
     }
@@ -104,7 +105,15 @@ export function SubscribeClient({ agent }: Props) {
       // x402 v2 client — the wallet signs an EIP-3009 authorization on the 402
       // challenge (GASLESS: no ETH needed). The operator verifies + settles via
       // the facilitator, then the agent runs and the answer is polled back.
-      const signer = walletClient.extend(publicActions) as unknown as ConstructorParameters<typeof ExactEvmScheme>[0];
+      // ClientEvmSigner needs `.address` directly (a viem WalletClient only has
+      // `.account.address`), so build the signer explicitly: wallet signs, a
+      // public client does the optional reads.
+      const signer = {
+        address: walletClient.account.address,
+        signTypedData: (m: Record<string, unknown>) =>
+          walletClient.signTypedData({ ...(m as Parameters<typeof walletClient.signTypedData>[0]), account: walletClient.account }),
+        readContract: (a: Parameters<NonNullable<typeof publicClient>["readContract"]>[0]) => publicClient!.readContract(a),
+      } as unknown as ConstructorParameters<typeof ExactEvmScheme>[0];
       const client = new x402Client().register("eip155:8453", new ExactEvmScheme(signer));
       const payFetch = wrapFetchWithPayment(fetch, client);
 
