@@ -57,7 +57,6 @@ import {
   settleResponseHeader,
 } from "./x402-v2.ts";
 import { readSplitConfig, resolvePayTo, forwardNetToVault } from "../funding/split-config.ts";
-import { agentWalletFor } from "../runtime/agent-wallet.ts";
 import { handleDemoScript } from "../agents/demo-script/http-handler.ts";
 import { handleDrillCypher } from "../agents/drill-cypher/http-handler.ts";
 
@@ -755,12 +754,6 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const splitCfg = readSplitConfig();
   const vaultRecipient = recipient;
   recipient = resolvePayTo(vaultRecipient, splitCfg);
-  // Self-funding: when the payment network is mainnet, route inbound USDC to the
-  // agent's OWN working wallet (the one it spends from via outbound x402), so it
-  // earns into the budget it operates on. Testnet keeps the vault/split path.
-  if (x402Net.name === "mainnet") {
-    recipient = agentWalletFor(deps.config.OPERATOR_PRIVATE_KEY as `0x${string}`, tokenId).address;
-  }
   const pricing = priceForToken(tokenId);
 
   // x402 v2: build spec requirements (network + asset from getNetwork()) and gate

@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { createPublicClient, createWalletClient, http, parseGwei, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "viem/chains";
+import { base, baseSepolia } from "viem/chains";
 
 /**
  * Base Sepolia fee headroom. Base fee is typically ~0.005 gwei but ticks up
@@ -29,9 +29,16 @@ import { baseSepolia } from "viem/chains";
  * <0.005 ETH per deploy at typical gas limits and survives any realistic
  * Sepolia spike.
  */
-const TX_FEES = {
+const TX_FEES_TESTNET = {
   maxPriorityFeePerGas: parseGwei("1"),
   maxFeePerGas: parseGwei("2"),
+} as const;
+// Base mainnet base fee is ~0.005-0.02 gwei; keep the cap tiny so a small ETH
+// balance can still cover three contract deploys (maxFee × gasLimit is reserved
+// up front per tx). ~0.0001 ETH total at typical mainnet gas.
+const TX_FEES_MAINNET = {
+  maxPriorityFeePerGas: parseGwei("0.01"),
+  maxFeePerGas: parseGwei("0.05"),
 } as const;
 
 // x402 v2 settles in Circle USDC (EIP-3009) — see packages/shared network.ts.
@@ -78,6 +85,10 @@ export interface DeployFinanceInput {
   creator: `0x${string}`; // initial recipient of 1M shares; also IPO beneficiary
   deployerKey: `0x${string}`;
   rpcUrl: string;
+  /** Chain id — 8453 deploys on Base mainnet, else Base Sepolia. */
+  chainId?: number;
+  /** Circle USDC the vault + IPO settle in (defaults to the Base Sepolia mock). */
+  usdc?: `0x${string}`;
 }
 
 export interface DeployFinanceResult {
@@ -90,8 +101,12 @@ export interface DeployFinanceResult {
 
 export async function deployFinanceStack(input: DeployFinanceInput): Promise<DeployFinanceResult> {
   const account = privateKeyToAccount(input.deployerKey);
-  const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(input.rpcUrl) });
-  const pub = createPublicClient({ chain: baseSepolia, transport: http(input.rpcUrl) });
+  const isMainnet = input.chainId === 8453;
+  const chain = isMainnet ? base : baseSepolia;
+  const usdc = input.usdc ?? CIRCLE_USDC_BASE_SEPOLIA;
+  const TX_FEES = isMainnet ? TX_FEES_MAINNET : TX_FEES_TESTNET;
+  const wallet = createWalletClient({ account, chain, transport: http(input.rpcUrl) });
+  const pub = createPublicClient({ chain, transport: http(input.rpcUrl) });
 
   const tokenId = BigInt(input.tokenId);
   const maxSharesStr = input.maxShares ?? "100000";
@@ -128,7 +143,7 @@ export async function deployFinanceStack(input: DeployFinanceInput): Promise<Dep
   const vaultHash = await wallet.deployContract({
     abi: vaultArt.abi as never,
     bytecode: vaultArt.bytecode,
-    args: [CIRCLE_USDC_BASE_SEPOLIA, shareToken, tokenId],
+    args: [usdc, shareToken, tokenId],
     ...TX_FEES,
   });
   console.log(`[finance-deploy] RevenueVault tx=${vaultHash}`);
@@ -143,7 +158,7 @@ export async function deployFinanceStack(input: DeployFinanceInput): Promise<Dep
     bytecode: ipoArt.bytecode,
     args: [
       shareToken,
-      CIRCLE_USDC_BASE_SEPOLIA,
+      usdc,
       pricePerShareSmallest,
       maxShares,
       input.creator,
