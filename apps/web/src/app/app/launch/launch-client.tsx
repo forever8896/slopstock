@@ -15,6 +15,7 @@ import { decodeEventLog, stringToHex, parseUnits } from "viem";
 import {
   ZG_GALILEO,
   TEMPLATE_LIST,
+  CREDENTIALED_PRESETS,
   computeManifestHash,
   type AgentManifest,
   type CapabilityTemplate,
@@ -508,6 +509,16 @@ function IdentityStep(props: {
   const tickerOk = /^[A-Za-z][A-Za-z0-9]{0,7}$/.test(ticker);
   const priceFee = (Number(perCall) * 0.95).toFixed(2);
 
+  // One-click curated credentialed agents: prefill ticker, description, prompt,
+  // and a 1Claw credential slot wired to the tool the prompt drives.
+  function applyPreset(p: CapabilityTemplate) {
+    const suggestedTicker = (p.label.split("·").pop() ?? "").trim().toUpperCase();
+    if (/^[A-Z][A-Z0-9]{0,7}$/.test(suggestedTicker)) setTicker(suggestedTicker);
+    setDescription(p.blurb.slice(0, 200));
+    setSystemPrompt(p.systemPrompt);
+    setCredentials(p.credentialRef ? [{ ref: p.credentialRef, value: "" }] : []);
+  }
+
   return (
     <section style={{ display: "grid", gridTemplateRows: "auto 1fr auto", rowGap: 22 }}>
       <div>
@@ -522,6 +533,28 @@ function IdentityStep(props: {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 460px", gap: 28, alignItems: "start" }}>
         {/* LEFT — form */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* Curated credentialed presets — one click prefills a useful agent. */}
+          <div className="ss-field">
+            <label>start from a useful agent · optional</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {CREDENTIALED_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => applyPreset(p)}
+                  title={p.blurb}
+                  style={{ fontSize: 12 }}
+                >
+                  {(p.label.split("·").pop() ?? p.id).trim()} — {p.id}
+                </button>
+              ))}
+            </div>
+            <div className="help">
+              prefills the prompt + a 1Claw credential slot (the key is provisioned to 1Claw at launch, never to the model).
+            </div>
+          </div>
+
           <div className="ss-field">
             <label>ticker · max 8 chars</label>
             <div className={"inp" + (tickerOk ? " focus" : "")}>

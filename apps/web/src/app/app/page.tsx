@@ -8,10 +8,13 @@ export default async function Home() {
   const agents = await listAgents();
   const cumulativeRevenue = agents.reduce((acc, a) => acc + a.cumulativeRevenueUsdc, 0n);
   const callsToday = agents.reduce((acc, a) => acc + a.callsToday, 0);
-  const internalCalls = agents.reduce(
-    (acc, a) => acc + (a.ticker === "ORCL" ? a.callsToday : 0),
-    0,
-  );
+  const internalCalls = 0; // agent→agent calls aren't tracked per-row here
+  // Feature the first listed agent for the hero/CTA links; fall back to /launch
+  // when nothing is listed yet (deprecated seed agents are hidden).
+  const feature = agents[0]?.ticker;
+  const featureHref = feature ? `/app/agent/${feature}` : "/app/launch";
+  const subscribeHref = feature ? `/app/agent/${feature}/subscribe` : "/app/launch";
+  const acquireHref = feature ? `/app/agent/${feature}/acquire` : "/app/launch";
 
   return (
     <>
@@ -37,9 +40,9 @@ export default async function Home() {
           </div>
 
           <div className="hero-cta">
-            <Link className="btn primary" href="/app/agent/AUDIT">browse agents →</Link>
+            <Link className="btn primary" href={featureHref}>browse agents →</Link>
             <Link className="btn" href="/app/launch">launch your own</Link>
-            <Link className="btn ghost" href="/app/agent/AUDIT/subscribe">submit inference</Link>
+            <Link className="btn ghost" href={subscribeHref}>submit inference</Link>
           </div>
 
         </div>
@@ -117,6 +120,16 @@ export default async function Home() {
             </tr>
           </thead>
           <tbody>
+            {agents.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ textAlign: "center", padding: "28px 12px", color: "var(--fg-2)" }}>
+                  No agents listed yet —{" "}
+                  <Link href="/app/launch" className="acc" style={{ textDecoration: "underline" }}>
+                    launch one →
+                  </Link>
+                </td>
+              </tr>
+            ) : null}
             {agents.map((a) => {
               const isDynamic = "permissionless" in a;
               const href = `/agent/${a.ticker}`;
@@ -210,7 +223,7 @@ export default async function Home() {
         <span className="sub">the agent gets paid either way · shareholders earn from inference</span>
       </div>
       <div className="ds-grid cols-2" style={{ gap: "var(--gap)" }}>
-        <Link href="/app/agent/AUDIT/subscribe" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
+        <Link href={subscribeHref} className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
           <div className="up" style={{ marginBottom: 6 }}>① call an agent</div>
           <div style={{ fontSize: 18, color: "var(--fg)", marginBottom: 6 }}>
             pay a per-call fee → get a TEE-attested response
@@ -220,9 +233,9 @@ export default async function Home() {
             (or pay ETH and let Uniswap swap to USDC into the same vault). The vault accumulates;
             the agent runs; you get back a signed receipt.
           </div>
-          <div className="acc" style={{ marginTop: 10 }}>try it on AUDIT →</div>
+          <div className="acc" style={{ marginTop: 10 }}>{feature ? `try it on ${feature} →` : "launch an agent →"}</div>
         </Link>
-        <Link href="/app/agent/AUDIT/acquire" className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
+        <Link href={acquireHref} className="panel" style={{ display: "block", color: "inherit", padding: "16px 18px" }}>
           <div className="up" style={{ marginBottom: 6 }}>② buy a share of one</div>
           <div style={{ fontSize: 18, color: "var(--fg)", marginBottom: 6 }}>
             mint ERC-20 shares from the IPO → earn future revenue pro-rata
@@ -232,7 +245,7 @@ export default async function Home() {
             treasury at a fixed USDC price. Every call into the vault is later snapshotted and
             paid out to holders by share weight.
           </div>
-          <div className="acc" style={{ marginTop: 10 }}>open AUDIT&apos;s cap table →</div>
+          <div className="acc" style={{ marginTop: 10 }}>{feature ? `open ${feature}'s cap table →` : "launch an agent →"}</div>
         </Link>
       </div>
 

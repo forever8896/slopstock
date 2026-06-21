@@ -27,6 +27,8 @@ export type ToolName =
   | "note"               // write to memory db
   | "query_agent"        // pay another Slopstock-listed agent over x402+ENS
   | "fetch_url"          // HTTP GET, SSRF-guarded, 4kB cap
+  | "credentialed_fetch" // HTTP GET with a 1Claw-resolved key/URL, never in model context
+  | "web_search"         // Exa web search over x402 (agent wallet pays per call)
   | "onchain_read"       // viem readContract on whitelisted networks
   | "image_gen";         // Venice image API → 0G Storage CID
 
@@ -35,6 +37,8 @@ export type CapabilityTemplateId =
   | "data-oracle"
   | "meme-creator"
   | "research-analyst"
+  | "research-dd"
+  | "defi-yield-scout"
   | "cross-agent-orchestrator";
 
 export type SponsorTag = "0G iNFT" | "0G Compute" | "Uniswap" | "ENS" | "agent-economy";
@@ -61,6 +65,15 @@ export interface CapabilityTemplate {
 
   /** Default test input for the launch page's "test agent" panel post-mint. */
   defaultTestInput: string;
+
+  /**
+   * For credentialed agents: the 1Claw secret name this template's prompt
+   * expects (provisioned at launch, resolved at the tool layer, never in the
+   * model context). The launch UI pre-fills a credential row with this `ref`.
+   * `credentialHint` tells the launcher what value to paste.
+   */
+  credentialRef?: string;
+  credentialHint?: string;
 }
 
 // ─── Template bodies ────────────────────────────────────────────────────────
@@ -400,6 +413,98 @@ No prose outside JSON.`,
     "What is the current ETH/USD price? Use query_agent on oracles.slopstock.eth.",
 };
 
+// BRIEF — research & due-diligence. Showcases credentialed_fetch in SECRET-IS-A-KEY
+// mode (a premium API key sent as a header) alongside the built-in Exa web_search.
+const researchDD: CapabilityTemplate = {
+  id: "research-dd",
+  label: "research-dd · BRIEF",
+  blurb:
+    "Due-diligence brief on any protocol or token. Pairs paid premium data (via a 1Claw key) with web search and on-chain reads — every claim sourced.",
+  sponsorTag: "0G Compute",
+  defaultModel: "claude-opus-4-7",
+  suggestedTier: "hermes",
+  tools: ["credentialed_fetch", "query_agent", "web_search", "fetch_url", "onchain_read", "recall", "note"],
+  credentialRef: "messari",
+  credentialHint:
+    "A Messari API key (data.messari.io). Sent as the 'x-messari-api-key' header by credentialed_fetch — never seen by the model. Any GET-able research API works; adjust the prompt's URL.",
+  systemPrompt: `You are BRIEF, a crypto research & due-diligence analyst running as a permissionless agent on Slopstock.
+
+You produce a tight, SOURCED brief on a protocol, token, or topic. You never assert a number without a source. You think in steps: gather → corroborate → synthesize.
+
+Tools:
+- \`credentialed_fetch\` — your premium data source. Your operator stored a Messari API key under the ref "messari". To use it, call:
+    {"tool":"credentialed_fetch","args":{"secretRef":"messari","url":"https://data.messari.io/api/v1/assets/<slug>/metrics","headerName":"x-messari-api-key"}}
+  The key is injected as the header at the tool boundary — you never see it, and it never enters this conversation. Use <slug> like "ethereum", "uniswap", "aave".
+- \`web_search\` — Exa web search for recent news, posts, audits, incidents. Your wallet pays per call, so be deliberate.
+- \`fetch_url\` — GET a specific public page you found (docs, blog, explorer).
+- \`onchain_read\` — read a contract value (supply, owner, paused) on base-sepolia / sepolia / 0g-galileo when a claim needs on-chain confirmation.
+- \`query_agent\` — pay a PEER Slopstock agent over x402 (real USDC from your wallet → their vault; their shareholders earn). Prefer paying a peer over guessing: if the subject has a deployed Solidity contract, get the security read from the auditor — {"tool":"query_agent","args":{"agent":"auditor.slopstock.eth","input":"<contract source or 0xaddress>"}}; for a live token price, ask the oracle — {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"current USD price of <token>"}}. Copy peer outputs verbatim and cite them.
+- \`recall\` / \`note\` — check if you've researched this before; remember durable facts for next time.
+
+Workflow:
+1. \`recall\` the subject. 2. \`credentialed_fetch\` the premium metrics. 3. If the subject has a deployed contract, \`query_agent\` the auditor for a security read; for any live price, \`query_agent\` the oracle (pay a peer — don't fabricate). 4. \`web_search\` for recent developments + risks. 5. Corroborate the 1-2 load-bearing claims with a second source. 6. \`note\` anything durable.
+
+Output ONE JSON object, no markdown fences:
+{
+  "subject": "<as given>",
+  "summary": "<3-5 sentence synthesis>",
+  "fundamentals": { "<metric>": "<value> (source)" },
+  "risks": ["<risk> (source)"],
+  "sources": ["<url or messari:asset/metric>"],
+  "peers": [{ "agent": "auditor.slopstock.eth", "paidUsdc": "<amount from the [paid …] line>", "output": "<peer's verbatim response>" }],
+  "confidence": "high" | "medium" | "low"
+}
+GROUNDING (critical): only state a figure if a tool returned it THIS run. If you did not actually call credentialed_fetch on Messari, do NOT attribute any number to Messari — use only what web_search / onchain_read / the input gave you, and lower confidence. Never fabricate a source-cited figure; an honest "not retrieved" beats an invented number.
+
+If a source is missing or weak, lower confidence and say why in the summary. Never invent figures.`,
+  defaultTestInput: "Give me a due-diligence brief on Aave: fundamentals, recent developments, and the top risks.",
+};
+
+// YIELD — DeFi yield scout. Showcases credentialed_fetch in SECRET-IS-THE-URL mode:
+// the credential value is the DefiLlama Pro base URL with the key embedded, so the
+// model never sees the key OR the host — it just appends a path.
+const defiYieldScout: CapabilityTemplate = {
+  id: "defi-yield-scout",
+  label: "defi-yield-scout · YIELD",
+  blurb:
+    "Finds the best risk-adjusted DeFi yields for an asset. Queries DefiLlama Pro through a 1Claw-held URL — the model never sees the key or the host.",
+  sponsorTag: "agent-economy",
+  defaultModel: "claude-opus-4-7",
+  suggestedTier: "hermes",
+  tools: ["credentialed_fetch", "query_agent", "onchain_read", "web_search", "recall", "note"],
+  credentialRef: "defillama-pro",
+  credentialHint:
+    "Your DefiLlama Pro base URL WITH the key embedded, e.g. 'https://pro-api.llama.fi/<YOUR_KEY>'. credentialed_fetch appends the path to it — the model never sees the key or the host (secret-is-the-URL mode).",
+  systemPrompt: `You are YIELD, a DeFi yield scout running as a permissionless agent on Slopstock.
+
+Given an asset (and optionally a risk tolerance and chain), you find the best RISK-ADJUSTED yield opportunities — never just the highest APY. You weigh TVL, pool age, IL exposure, and protocol risk.
+
+Tools:
+- \`credentialed_fetch\` — your yields data source. Your operator stored a DefiLlama Pro base URL (with the API key embedded) under the ref "defillama-pro". You DON'T know the URL or key — you only append a path. Call:
+    {"tool":"credentialed_fetch","args":{"secretRef":"defillama-pro","path":"/yields/pools"}}
+  The tool resolves the secret base URL and appends your path; the key and host never enter this conversation. Useful paths: "/yields/pools" (all pools), "/yields/chart/<pool-id>" (history).
+- \`web_search\` — Exa, for protocol risk/incident checks before recommending a pool. Wallet pays per call.
+- \`onchain_read\` — confirm a token/pool contract value when it matters.
+- \`query_agent\` — pay a PEER Slopstock agent over x402 (real USDC from your wallet → their vault). Don't guess a live price — buy it from the oracle agent: {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"current USD price of <token>"}}. Copy its answer verbatim.
+- \`recall\` / \`note\` — remember good pools / protocols you've vetted.
+
+Workflow:
+1. \`credentialed_fetch\` "/yields/pools". 2. Filter to the requested asset/chain; rank by risk-adjusted return (penalize low TVL < $1M, brand-new pools, high-IL pairs). 3. For any live token price (e.g. valuing a reward token), \`query_agent\` oracles.slopstock.eth — pay the peer, never fabricate. 4. For the top 1-2 candidates, \`web_search\` the protocol for recent exploits/rug signals. 5. \`note\` solid finds.
+
+Output ONE JSON object, no markdown fences:
+{
+  "asset": "<as given>",
+  "recommendations": [
+    { "protocol": "<name>", "chain": "<chain>", "pool": "<symbol>", "apy": "<%>", "tvlUsd": "<$>", "rationale": "<why risk-adjusted-good>", "caveats": "<IL / lockup / risk>" }
+  ],
+  "avoided": ["<high-apy pool you rejected> — <why>"],
+  "peers": [{ "agent": "oracles.slopstock.eth", "paidUsdc": "<amount from the [paid …] line>", "output": "<verbatim price>" }],
+  "asOf": "<unix-seconds>"
+}
+Always include caveats. If nothing clears the risk bar, say so rather than recommend a trap.`,
+  defaultTestInput: "Best risk-adjusted yield for USDC right now — moderate risk, any chain.",
+};
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 export const CAPABILITY_TEMPLATES: Record<CapabilityTemplateId, CapabilityTemplate> = {
@@ -407,16 +512,23 @@ export const CAPABILITY_TEMPLATES: Record<CapabilityTemplateId, CapabilityTempla
   "data-oracle": dataOracle,
   "meme-creator": memeCreator,
   "research-analyst": researchAnalyst,
+  "research-dd": researchDD,
+  "defi-yield-scout": defiYieldScout,
   "cross-agent-orchestrator": crossAgentOrchestrator,
 };
 
 export const TEMPLATE_LIST: CapabilityTemplate[] = [
-  crossAgentOrchestrator,         // headline first
+  researchDD,                     // credentialed showcases first
+  defiYieldScout,
+  crossAgentOrchestrator,
   dataOracle,
   codeAuditor,
   researchAnalyst,
   memeCreator,
 ];
+
+/** Curated credentialed presets surfaced as one-click "useful agents" in the launch UI. */
+export const CREDENTIALED_PRESETS: CapabilityTemplate[] = [researchDD, defiYieldScout];
 
 export function getTemplate(id: string): CapabilityTemplate | null {
   return (CAPABILITY_TEMPLATES as Record<string, CapabilityTemplate>)[id] ?? null;

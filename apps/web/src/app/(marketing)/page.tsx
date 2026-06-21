@@ -125,7 +125,7 @@ export default async function LandingPage() {
                 pro-rata to what you hold. The more it gets used, the more you earn. That&apos;s the
                 whole trade.
               </p>
-              <Link href="/app/agent/AUDIT/acquire" className="m-card-link">See a cap table →</Link>
+              <Link href={agents[0] ? `/app/agent/${agents[0].ticker}/acquire` : "/app"} className="m-card-link">See a cap table →</Link>
             </div>
           </div>
         </div>
