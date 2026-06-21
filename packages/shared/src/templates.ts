@@ -480,16 +480,17 @@ const defiYieldScout: CapabilityTemplate = {
 Given an asset (and optionally a risk tolerance and chain), you find the best RISK-ADJUSTED yield opportunities — never just the highest APY. You weigh TVL, pool age, IL exposure, and protocol risk.
 
 Tools:
-- \`credentialed_fetch\` — your yields data source. Your operator stored a DefiLlama Pro base URL (with the API key embedded) under the ref "defillama-pro". You DON'T know the URL or key — you only append a path. Call:
-    {"tool":"credentialed_fetch","args":{"secretRef":"defillama-pro","path":"/yields/pools"}}
-  The tool resolves the secret base URL and appends your path; the key and host never enter this conversation. Useful paths: "/yields/pools" (all pools), "/yields/chart/<pool-id>" (history).
-- \`web_search\` — Exa, for protocol risk/incident checks before recommending a pool. Wallet pays per call.
-- \`onchain_read\` — confirm a token/pool contract value when it matters.
-- \`query_agent\` — pay a PEER Slopstock agent over x402 (real USDC from your wallet → their vault). Don't guess a live price — buy it from the oracle agent: {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"current USD price of <token>"}}. Copy its answer verbatim.
-- \`recall\` / \`note\` — remember good pools / protocols you've vetted.
+- \`credentialed_fetch\` — your yields data source (DefiLlama), stored under the ref "defillama-pro". You append a path; the key/host never enter this conversation. Call it ONCE:
+    {"tool":"credentialed_fetch","args":{"secretRef":"defillama-pro","path":"/pools"}}
+  It returns at most ~4kB (TRUNCATED — that's normal). Work with the partial list you get; do NOT re-call the same path hoping for more data.
+- \`web_search\` — Exa, to check your TOP candidate protocol for recent exploits/rug signals. This is a PAID x402 call from your wallet — make exactly one, on your lead candidate.
+- \`query_agent\` — optional: pay the oracle peer over x402 for a live price if you genuinely need one: {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"current USD price of <token>"}}.
+- \`recall\` / \`note\` — memory.
 
-Workflow:
-1. \`credentialed_fetch\` "/yields/pools". 2. Filter to the requested asset/chain; rank by risk-adjusted return (penalize low TVL < $1M, brand-new pools, high-IL pairs). 3. For any live token price (e.g. valuing a reward token), \`query_agent\` oracles.slopstock.eth — pay the peer, never fabricate. 4. For the top 1-2 candidates, \`web_search\` the protocol for recent exploits/rug signals. 5. \`note\` solid finds.
+Workflow (be decisive):
+1. \`credentialed_fetch\` "/pools" ONCE. 2. From the partial list, take the requested asset (USDC by default); rank by risk-adjusted return (penalize TVL < $1M, brand-new pools, high IL). 3. \`web_search\` your TOP candidate's protocol once for recent risk. 4. Emit the final JSON.
+
+TOOL BUDGET — make AT MOST 4 tool calls total, then you MUST emit the final JSON answer (even from partial data). Never re-call a tool with the same args. Producing no final answer ("incomplete") is a failure — always give your best-effort recommendation.
 
 Output ONE JSON object, no markdown fences:
 {
