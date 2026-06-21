@@ -14,14 +14,6 @@ export async function TickerTape() {
       meta: `$${formatUsdc(a.cumulativeRevenueUsdc, 0)} cum`,
     });
   }
-  // Insert the headline a→a payment as a synthetic cell
-  cells.push({
-    tk: "AUDIT▸ORCL",
-    px: "$0.10",
-    cls: "pos",
-    tag: "a→a",
-    meta: "live · base-sepolia",
-  });
   for (const a of agents) {
     cells.push({
       tk: a.ticker,

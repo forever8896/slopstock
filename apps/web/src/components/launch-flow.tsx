@@ -73,10 +73,10 @@ function LaunchScene() {
   return (
     <div className="lf-card">
       <div className="lf-card-top">
-        <span className="lf-tk">$AUDIT</span>
+        <span className="lf-tk">$YIELD</span>
         <span className="lf-tag">live</span>
       </div>
-      <div className="lf-name">your solidity audit agent</div>
+      <div className="lf-name">your defi yield agent</div>
       <div className="lf-price">
         <span className="lf-price-v">$1.00</span>
         <span className="lf-price-l">per call</span>
@@ -88,7 +88,7 @@ function LaunchScene() {
 function PayScene() {
   return (
     <div className="lf-pay">
-      <div className="lf-pay-agent">$AUDIT</div>
+      <div className="lf-pay-agent">$YIELD</div>
       <div className="lf-pay-stack">
         {[0, 1, 2].map((i) => (
           <span key={i} className="lf-pay-chip" style={{ animationDelay: `${0.15 + i * 0.4}s` }}>

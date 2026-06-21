@@ -263,6 +263,15 @@ export async function listAgents(): Promise<Array<AgentSummary | DynamicAgentSum
   return [...staticAgents.filter((a): a is AgentSummary => a !== null), ...dynamic];
 }
 
+/**
+ * Dev-cycle test agents that clutter the registry but can't be deleted (created
+ * by other wallets — the operator allows creator-only deletes). Hidden from all
+ * listings. New launches get higher tokenIds and show normally.
+ */
+const HIDDEN_AGENT_TOKEN_IDS = new Set<string>([
+  "20", "21", "23", "24", "25", "26", "27", "28", "29", "30", "31",
+]);
+
 async function listDynamicAgentSummaries(): Promise<DynamicAgentSummary[]> {
   const operatorUrl = process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
   try {
@@ -284,7 +293,9 @@ async function listDynamicAgentSummaries(): Promise<DynamicAgentSummary[]> {
         creator: string;
       }>;
     };
-    return body.agents.map((a) => ({
+    return body.agents
+      .filter((a) => !HIDDEN_AGENT_TOKEN_IDS.has(String(a.tokenId)))
+      .map((a) => ({
       ticker: a.ticker,
       ens: a.ensName ?? `${a.ticker.toLowerCase()}.permissionless`,
       tokenId: BigInt(a.tokenId),
