@@ -4,7 +4,7 @@
  */
 
 import { createPublicClient, http, type Chain } from "viem";
-import { baseSepolia, sepolia } from "viem/chains";
+import { base, baseSepolia, sepolia } from "viem/chains";
 import { ZG_GALILEO } from "@stratum/shared";
 
 export const zgGalileoChain = {
@@ -23,9 +23,11 @@ export const zgPublicClient = createPublicClient({
 
 // Server-side reads use publicnode directly (sepolia.base.org 502s frequently).
 // Browser writes go through wagmi's fallback chain in lib/wagmi.ts.
+// Agent finance (ShareToken/RevenueVault/IPOSale) is deployed on Base MAINNET,
+// so on-chain reads (vault balance, holders, IPO) go to mainnet.
 export const basePublicClient = createPublicClient({
-  chain: baseSepolia,
-  transport: http("https://base-sepolia-rpc.publicnode.com"),
+  chain: base,
+  transport: http("https://mainnet.base.org"),
 });
 
 // Ethereum Sepolia — host of `slopstock.eth` and the ENS PublicResolver.
