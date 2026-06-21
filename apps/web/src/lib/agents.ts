@@ -248,10 +248,19 @@ export async function listAgents(): Promise<Array<AgentSummary | DynamicAgentSum
     (t) => !AGENT_METADATA[t.toUpperCase()]?.deprecated,
   );
   const [staticAgents, dynamic] = await Promise.all([
-    Promise.all(liveTickers.map(loadAgentSummary)),
+    // A single failing on-chain read must never crash the whole markets list —
+    // drop the offending agent rather than throw the page.
+    Promise.all(
+      liveTickers.map((t) =>
+        loadAgentSummary(t).catch((e) => {
+          console.error(`[agents] loadAgentSummary(${t}) failed, skipping:`, e);
+          return null;
+        }),
+      ),
+    ),
     listDynamicAgentSummaries(),
   ]);
-  return [...staticAgents, ...dynamic];
+  return [...staticAgents.filter((a): a is AgentSummary => a !== null), ...dynamic];
 }
 
 async function listDynamicAgentSummaries(): Promise<DynamicAgentSummary[]> {
