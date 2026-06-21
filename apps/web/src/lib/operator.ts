@@ -99,6 +99,50 @@ async function pollInferResult(callId: string): Promise<InferResult> {
   return { ok: false, kind: "error", status: 0, message: "polling timed out (>3min)" };
 }
 
+/**
+ * Paid inference via an x402-wrapped fetch (the @x402/fetch client signs the
+ * EIP-3009 authorization on the 402 challenge and retries). Used by the browser
+ * subscribe flow on Base mainnet: the wallet signs (gasless), the operator
+ * verifies + settles via the facilitator, then we poll the async result.
+ * Returns the settlement tx alongside the result for the receipt UI.
+ */
+/** A fetch-shaped function (e.g. the x402-wrapped fetch from @x402/fetch). */
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+export async function inferPaid(
+  payFetch: FetchLike,
+  req: InferRequest,
+): Promise<{ result: InferResult; settlementTx?: string }> {
+  let res: Response;
+  try {
+    res = await payFetch(`${OPERATOR_URL}/x402/infer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tokenId: req.tokenId, input: req.input, subscriber: req.subscriber }),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { result: { ok: false, kind: "error", status: 0, message: `payment/network error: ${message}` } };
+  }
+  if (res.status === 402) {
+    const t = await res.text().catch(() => "");
+    return { result: { ok: false, kind: "error", status: 402, message: `payment failed: ${t.slice(0, 160)}` } };
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    return { result: { ok: false, kind: "error", status: res.status, message: t || res.statusText } };
+  }
+  const body = (await res.json()) as {
+    ok?: true; status?: string; callId: string; output?: string; receipt?: InferenceReceipt; settlementTx?: string;
+  };
+  const settlementTx = body.settlementTx;
+  if (body.status === "running") return { result: await pollInferResult(body.callId), settlementTx };
+  if (body.output && body.receipt) {
+    return { result: { ok: true, callId: body.callId, output: body.output, receipt: body.receipt }, settlementTx };
+  }
+  return { result: { ok: false, kind: "error", status: 500, message: "operator response in unknown shape" }, settlementTx };
+}
+
 export async function infer(req: InferRequest): Promise<InferResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (req.paymentReceipt) {

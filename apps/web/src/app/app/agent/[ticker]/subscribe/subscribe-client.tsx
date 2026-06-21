@@ -4,19 +4,19 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
-  useBalance,
   useChainId,
   useReadContract,
   useSwitchChain,
-  useWaitForTransactionReceipt,
-  useWriteContract,
+  useWalletClient,
 } from "wagmi";
-import { baseSepolia } from "wagmi/chains";
-import { encodeFunctionData, parseEther } from "viem";
-import { erc20Abi, swapRouter02Abi } from "@stratum/contracts-types";
-import { UNISWAP_BASE_SEPOLIA, USDC_BASE_SEPOLIA } from "@stratum/shared";
+import { base } from "wagmi/chains";
+import { publicActions } from "viem";
+import { erc20Abi } from "@stratum/contracts-types";
+import { x402Client } from "@x402/core/client";
+import { ExactEvmScheme } from "@x402/evm";
+import { wrapFetchWithPayment } from "@x402/fetch";
 import type { AgentDetail } from "@/lib/agents";
-import { infer, type InferResult, type PaymentReceipt } from "@/lib/operator";
+import { inferPaid, type InferResult } from "@/lib/operator";
 import { sampleContracts } from "@/lib/sample-contracts";
 import { formatUsdc, shortAddr } from "@/lib/format";
 import { InferenceOutput } from "@/components/inference-output";
@@ -28,35 +28,22 @@ interface Props {
 }
 
 type Hex = `0x${string}`;
-type PayToken = "USDC" | "ETH";
 type Phase = "lock" | "break" | "chip" | "receipt";
 
-const BASE_CHAIN_ID = baseSepolia.id;
-/** ETH→USDC max-in scales with the agent's per-call price.
- *  ETH ≈ $2400 testnet → 1 ETH ≈ 2_400_000_000 USDC-smallest.
- *  Use a 4× safety multiplier on top so slippage + price-shift never reverts.
- *  Uniswap refunds the unused portion via refundETH(), so over-sizing is free. */
-function ethMaxForUsdc(perCallUsdcSmallest: bigint): bigint {
-  // (perCallUsdcSmallest * 4 * 1e18) / (2400 * 1e6)
-  // = perCallUsdcSmallest * 4 * 1e12 / 2400
-  // Order to avoid underflow: multiply first, divide last.
-  const numerator = perCallUsdcSmallest * 4n * 10n ** 12n;
-  const eth = numerator / 2400n;
-  // Floor at 0.001 ETH so tiny per-call values still get a usable max.
-  const floor = parseEther("0.001");
-  return eth > floor ? eth : floor;
-}
+const BASE_CHAIN_ID = base.id; // Base mainnet (8453)
+/** Canonical Circle USDC on Base mainnet (the x402 settlement asset). */
+const USDC_BASE: Hex = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 export function SubscribeClient({ agent }: Props) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
+  const { data: walletClient } = useWalletClient({ chainId: BASE_CHAIN_ID });
   const onBase = chainId === BASE_CHAIN_ID;
 
   const [input, setInput] = useState(
-    `audit the contract at ${shortAddr(agent.contracts.shareToken, 6)} — focus on reentrancy, access-control on the upgrade path, and any rounding errors in shareWithdraw().`,
+    "Best risk-adjusted USDC yield right now — moderate risk, any chain. Check recent protocol risk.",
   );
-  const [payToken, setPayToken] = useState<PayToken>("USDC");
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [phase, setPhase] = useState<Phase>("lock");
   const [busy, setBusy] = useState(false);
@@ -69,35 +56,16 @@ export function SubscribeClient({ agent }: Props) {
   const subscriber: Hex = address ?? "0x0000000000000000000000000000000000000000";
 
   const { data: usdcBalance, refetch: refetchUsdc } = useReadContract({
-    address: USDC_BASE_SEPOLIA,
+    address: USDC_BASE,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
     chainId: BASE_CHAIN_ID,
     query: { enabled: Boolean(address) },
   });
-  const { data: ethBalance, refetch: refetchEth } = useBalance({
-    address,
-    chainId: BASE_CHAIN_ID,
-    query: { enabled: Boolean(address) },
-  });
 
   const price = agent.perCallUsdc;
-  const ethMax = ethMaxForUsdc(price);
   const hasUsdc = usdcBalance !== undefined && usdcBalance >= price;
-  const hasEth = ethBalance !== undefined && ethBalance.value >= ethMax;
-
-  const { writeContractAsync, data: txHash } = useWriteContract();
-  const { isLoading: txPending, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
-    hash: txHash,
-    chainId: BASE_CHAIN_ID,
-  });
-
-  useEffect(() => {
-    if (!txConfirmed || !txHash) return;
-    void submitToOperator(txHash);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [txConfirmed, txHash]);
 
   // Live tick during the poll phase so the UI doesn't look frozen.
   useEffect(() => {
@@ -109,22 +77,22 @@ export function SubscribeClient({ agent }: Props) {
     return () => clearInterval(id);
   }, [pollStartedAt]);
 
-  async function runAudit() {
+  async function runAgent() {
     if (!input.trim() || !address) return;
     setErrorMsg(null);
 
     if (!onBase) {
-      setErrorMsg(`switch your wallet to Base Sepolia (chain ${BASE_CHAIN_ID})`);
+      setErrorMsg(`switch your wallet to Base (chain ${BASE_CHAIN_ID})`);
       return;
     }
-    if (payToken === "USDC" && !hasUsdc) {
+    if (!hasUsdc) {
       setErrorMsg(
-        `insufficient USDC (have ${usdcBalance ? formatUsdc(usdcBalance, 2) : "0"}, need ${formatUsdc(price, 2)}). pay in eth instead.`,
+        `insufficient USDC (have ${usdcBalance ? formatUsdc(usdcBalance, 2) : "0"}, need ${formatUsdc(price, 2)} on Base mainnet).`,
       );
       return;
     }
-    if (payToken === "ETH" && !hasEth) {
-      setErrorMsg(`need at least 0.001 ETH on Base Sepolia. faucet: bridge.base.org/deposit`);
+    if (!walletClient) {
+      setErrorMsg("wallet not ready — reconnect and try again");
       return;
     }
 
@@ -133,87 +101,27 @@ export function SubscribeClient({ agent }: Props) {
     setPhase("lock");
 
     try {
-      let hash: Hex;
-      if (payToken === "USDC") {
-        hash = await writeContractAsync({
-          address: USDC_BASE_SEPOLIA,
-          abi: erc20Abi,
-          functionName: "transfer",
-          args: [agent.contracts.vault, price],
-          chainId: BASE_CHAIN_ID,
-          // Pin gas to bypass Base Sepolia public RPC's flaky estimateGas
-          // (returns "exceeds max transaction gas limit" instead of an
-          // estimate). USDC.transfer is ~50k gas; 200k is safe.
-          gas: 200_000n,
-        });
-      } else {
-        const swapData = encodeFunctionData({
-          abi: swapRouter02Abi,
-          functionName: "exactOutputSingle",
-          args: [
-            {
-              tokenIn: UNISWAP_BASE_SEPOLIA.weth,
-              tokenOut: USDC_BASE_SEPOLIA,
-              fee: UNISWAP_BASE_SEPOLIA.fee,
-              recipient: agent.contracts.vault,
-              amountOut: price,
-              amountInMaximum: ethMax,
-              sqrtPriceLimitX96: 0n,
-            },
-          ],
-        });
-        const refundData = encodeFunctionData({
-          abi: swapRouter02Abi,
-          functionName: "refundETH",
-          args: [],
-        });
-        hash = await writeContractAsync({
-          address: UNISWAP_BASE_SEPOLIA.swapRouter02,
-          abi: swapRouter02Abi,
-          functionName: "multicall",
-          args: [[swapData, refundData]],
-          value: ethMax,
-          chainId: BASE_CHAIN_ID,
-          // Pin gas — Uniswap V3 multicall (exactOutputSingle + refundETH)
-          // is ~250-350k gas. 600k headroom. Bypasses Base Sepolia RPC's
-          // estimateGas quirk that throws "exceeds max transaction gas limit".
-          gas: 600_000n,
-        });
-      }
-      setPaidTxHash(hash);
-      setPhase("break");
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-      setStep(2);
-    }
-  }
+      // x402 v2 client — the wallet signs an EIP-3009 authorization on the 402
+      // challenge (GASLESS: no ETH needed). The operator verifies + settles via
+      // the facilitator, then the agent runs and the answer is polled back.
+      const signer = walletClient.extend(publicActions) as unknown as ConstructorParameters<typeof ExactEvmScheme>[0];
+      const client = new x402Client().register("eip155:8453", new ExactEvmScheme(signer));
+      const payFetch = wrapFetchWithPayment(fetch, client);
 
-  async function submitToOperator(hash: Hex) {
-    setStep(3);
-    setPhase("break");
-    setErrorMsg(null);
-    setPollStartedAt(Date.now());
-    const receipt: PaymentReceipt = {
-      txHash: hash,
-      facilitator: "chain",
-      receiptId: `rcpt-${crypto.randomUUID()}`,
-    };
-    try {
-      // animate phases ahead of the real wait
-      setTimeout(() => setPhase("chip"), 800);
-      const r = await infer({
+      setPhase("break");
+      setStep(3);
+      setPollStartedAt(Date.now());
+      setTimeout(() => setPhase("chip"), 1200);
+
+      const { result: r, settlementTx } = await inferPaid(payFetch, {
         tokenId: agent.tokenId.toString(),
         input,
         subscriber,
-        paymentReceipt: receipt,
       });
+      if (settlementTx) setPaidTxHash(settlementTx as Hex);
+
       if (!r.ok) {
-        // Surface poll errors / 402 / non-ok responses as a real error message
-        // instead of silently advancing to step 4 with no receipt.
-        const msg = r.kind === "payment-required"
-          ? "operator says payment is missing — try again with a fresh tx"
-          : r.message;
+        const msg = r.kind === "payment-required" ? "payment was rejected — check your USDC balance" : r.message;
         setErrorMsg(`agent did not return: ${msg}`);
         setStep(2);
         setPhase("lock");
@@ -223,9 +131,11 @@ export function SubscribeClient({ agent }: Props) {
       setPhase("receipt");
       setStep(4);
       void refetchUsdc();
-      void refetchEth();
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setErrorMsg(/rejected|denied|User rejected/i.test(msg) ? "you rejected the signature" : msg);
+      setStep(2);
+      setPhase("lock");
     } finally {
       setBusy(false);
       setPollStartedAt(null);
@@ -242,11 +152,11 @@ export function SubscribeClient({ agent }: Props) {
   }
 
   const submitLabel = useMemo(() => {
-    if (busy && txPending) return payToken === "ETH" ? "swapping eth → usdc…" : "settling on chain…";
-    if (busy) return "running inference…";
+    if (busy && pollStartedAt) return "running inference…";
+    if (busy) return "sign in your wallet…";
     if (result?.ok) return "verified ✓ · run another";
     return `submit · pay ${agent.perCallHuman} →`;
-  }, [busy, txPending, payToken, result, agent.perCallHuman]);
+  }, [busy, pollStartedAt, result, agent.perCallHuman]);
 
   return (
     <>
@@ -259,7 +169,7 @@ export function SubscribeClient({ agent }: Props) {
         }
         right={
           <>
-            x402 endpoint <span className="fg2">/x402/infer · {agent.perCallHuman}</span> · price-locked
+            x402 endpoint <span className="fg2">/x402/infer · {agent.perCallHuman}</span> · Base mainnet
           </>
         }
       />
@@ -277,7 +187,7 @@ export function SubscribeClient({ agent }: Props) {
         </div>
       ) : !onBase ? (
         <div className="panel" style={{ marginTop: 14, padding: "12px 14px", borderColor: "var(--amber)", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
-          <span style={{ color: "var(--amber)" }}>switch to Base Sepolia (chain {BASE_CHAIN_ID}) to pay</span>
+          <span style={{ color: "var(--amber)" }}>switch to Base mainnet (chain {BASE_CHAIN_ID}) to pay</span>
           <button className="btn" onClick={() => switchChain({ chainId: BASE_CHAIN_ID })}>
             switch network
           </button>
@@ -295,7 +205,7 @@ export function SubscribeClient({ agent }: Props) {
               </span>
             </h3>
             <div className="muted" style={{ marginBottom: 8, fontSize: 14 }}>
-              Plain text. The agent reads this in the same way every other agent on this site does —
+              Plain text. The agent reads this the same way every other agent on this site does —
               system prompt + your input → its tools → final answer.
             </div>
             <textarea
@@ -322,61 +232,42 @@ export function SubscribeClient({ agent }: Props) {
 
           <div className="work-section">
             <h3>
-              02 · how you&apos;ll pay
+              02 · how you&apos;ll pay <span className="muted" style={{ float: "right" }}>x402 · gasless</span>
             </h3>
             <div className="muted" style={{ marginBottom: 10, fontSize: 14 }}>
-              The operator will return a <code>402 Payment Required</code> with the agent&apos;s
-              vault address and the price. Both options below put exactly{" "}
-              <span className="acc">{agent.perCallHuman} USDC</span> into that vault in one transaction;
-              the operator&apos;s validator then finds the matching{" "}
-              <code>USDC.Transfer → vault</code> log and accepts payment. No facilitator, no escrow.
+              The operator returns a <code>402 Payment Required</code> over the x402 standard. Your
+              wallet <b>signs</b> an EIP-3009 USDC authorization for{" "}
+              <span className="acc">{agent.perCallHuman} USDC</span> — no gas, no ETH needed. A
+              facilitator settles it on Base mainnet straight into{" "}
+              <b>{agent.ticker}&apos;s own working wallet</b>, which is the same wallet the agent
+              spends from when it pays other x402 services. Earn → budget → spend, all on mainnet.
             </div>
             <div className="pay-grid">
-              <button
-                type="button"
-                className={`pay-card ${payToken === "USDC" ? "on" : ""}`}
-                onClick={() => setPayToken("USDC")}
-              >
+              <div className="pay-card on">
                 <div className="h">
-                  <span className="t">pay USDC directly</span>
-                  <span className="badge">simplest</span>
+                  <span className="t">sign USDC authorization</span>
+                  <span className="badge">gasless</span>
                 </div>
                 <div className="body">
                   <div className="row"><span className="k">price</span><span>{agent.perCallHuman} USDC</span></div>
                   <div className="row"><span className="k">your balance</span><span>{usdcBalance !== undefined ? `$${formatUsdc(usdcBalance, 2)}` : "—"}</span></div>
-                  <div className="row"><span className="k">tx</span><span>one transfer to the vault</span></div>
-                  <div className="row"><span className="k">gas</span><span>~$0.0003</span></div>
+                  <div className="row"><span className="k">network</span><span>Base mainnet · eip155:8453</span></div>
+                  <div className="row"><span className="k">gas</span><span>none — facilitator settles</span></div>
                 </div>
-              </button>
-              <button
-                type="button"
-                className={`pay-card ${payToken === "ETH" ? "on" : ""}`}
-                onClick={() => setPayToken("ETH")}
-              >
-                <div className="h">
-                  <span className="t">pay ETH → swap to USDC</span>
-                  <span className="badge">no USDC needed</span>
-                </div>
-                <div className="body">
-                  <div className="row"><span className="k">you send</span><span>~0.0004 ETH</span></div>
-                  <div className="row"><span className="k">vault receives</span><span>{agent.perCallHuman} USDC</span></div>
-                  <div className="row"><span className="k">how</span><span>Uniswap V3 → vault</span></div>
-                  <div className="row"><span className="k">unused ETH</span><span>refunded automatically</span></div>
-                </div>
-              </button>
+              </div>
             </div>
 
             <div className="route">
               <span className="leg">your wallet</span>
-              <div className="arrow"><span className="pool">{payToken === "ETH" ? "uniswap v3 · base sepolia" : "USDC.transfer"}</span></div>
-              <span className="leg">{agent.ticker} vault</span>
+              <div className="arrow"><span className="pool">x402 · EIP-3009 sig → facilitator</span></div>
+              <span className="leg">{agent.ticker} wallet</span>
             </div>
           </div>
 
           <div style={{ marginTop: 14 }}>
             <button
               className={"mint-btn" + (busy ? " busy" : "")}
-              onClick={result?.ok ? reset : runAudit}
+              onClick={result?.ok ? reset : runAgent}
               disabled={!isConnected || !input.trim() || busy}
             >
               {submitLabel}
@@ -385,9 +276,9 @@ export function SubscribeClient({ agent }: Props) {
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 13, color: "var(--mute)" }}>
               <span>
                 {paidTxHash ? (
-                  <>paid in tx <code className="acc">{shortAddr(paidTxHash, 6)}</code> — operator is verifying the log walk now…</>
+                  <>settled in tx <code className="acc">{shortAddr(paidTxHash, 6)}</code> on Base mainnet — agent is running…</>
                 ) : (
-                  "click submit → wallet pops up → tx confirms on base sepolia → agent runs in TEE → response below"
+                  "click submit → wallet asks for one signature (gasless) → agent runs in TEE → response below"
                 )}
               </span>
               <button className="btn ghost" onClick={reset} disabled={busy} style={{ height: 24, padding: "0 8px", fontSize: 12 }}>
@@ -411,7 +302,7 @@ export function SubscribeClient({ agent }: Props) {
               an Intel TDX enclave; the response comes back signed.
             </div>
             <div className="stages">
-              <Stage name="lock" label="bundle the call" icon="[#]" current={phase} />
+              <Stage name="lock" label="sign x402 payment" icon="[#]" current={phase} />
               <Stage name="break" label="ship to enclave" icon="[/]" current={phase} />
               <Stage name="chip" label="model signs reply" icon="[✓]" current={phase} />
               <Stage name="receipt" label="receipt back to you" icon="[≡]" current={phase} />
@@ -444,20 +335,6 @@ export function SubscribeClient({ agent }: Props) {
       </section>
 
     </>
-  );
-}
-
-function Step({ n, title, meta, current }: { n: 1 | 2 | 3 | 4; title: string; meta: string; current: 1 | 2 | 3 | 4 }) {
-  const cls = n < current ? "step done" : n === current ? "step active" : "step";
-  return (
-    <div className={cls} data-step={n}>
-      <div className="n">
-        <span className="dot" />
-        <span>0{n} / {n === 1 ? "compose" : n === 2 ? "pay" : n === 3 ? "seal" : "receipt"}</span>
-      </div>
-      <div className="ttl">{title}</div>
-      <div className="meta">{meta}</div>
-    </div>
   );
 }
 
@@ -506,13 +383,13 @@ function ReceiptBlock({
       <div className="body">
         Below is the agent&apos;s answer. The signature recovers to the on-chain TEE signer
         address — that&apos;s how we know the response came out of the enclave and wasn&apos;t
-        forged. The agent&apos;s vault is now {agent.perCallHuman} richer; that USDC will flow to
-        shareholders next time someone snaps the vault.
+        forged. The {agent.perCallHuman} you paid landed in {agent.ticker}&apos;s own wallet on Base
+        mainnet — the budget it spends from when it pays other agents and services over x402.
       </div>
 
       <div className="grid">
         <div className="c">
-          <div className="l">tx hash</div>
+          <div className="l">settlement tx</div>
           <div className="v acc">{txHash ? shortAddr(txHash, 8) : "—"}</div>
         </div>
         <div className="c">
@@ -535,7 +412,7 @@ function ReceiptBlock({
         </div>
         <div className="c">
           <div className="l">status</div>
-          <div className="v acc">verified · written to chain</div>
+          <div className="v acc">settled · Base mainnet</div>
         </div>
       </div>
 
@@ -543,7 +420,7 @@ function ReceiptBlock({
         <div className="exec-flow" style={{ marginTop: 18 }}>
           <h4 style={{ margin: "0 0 10px" }}>execution flow</h4>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <FlowStep icon="▸" label="x402 paid" detail={`you → ${agent.ticker} · ${agent.perCallHuman} on Base`} accent />
+            <FlowStep icon="▸" label="x402 paid" detail={`you → ${agent.ticker} · ${agent.perCallHuman} on Base mainnet`} accent />
             <FlowStep icon="✦" label="0G sealed compute" detail="deepseek · TEE-attested in the enclave" />
             {result.steps
               .filter((s) => s.kind !== "llm")
@@ -572,28 +449,20 @@ function ReceiptBlock({
   );
 }
 
-function tryFormatJson(s: string): string {
-  try {
-    return JSON.stringify(JSON.parse(s), null, 2);
-  } catch {
-    return s;
-  }
-}
-
 const FRAMES: Record<Phase, (a: AgentDetail) => string> = {
   lock: (a) =>
     `  ┌─────────────────────────────────────┐
-  │ <span class="acc">[#] sealing bundle…</span>                 │
-  │   payload  · ${a.perCallHuman.padEnd(7)}                │
+  │ <span class="acc">[#] sign x402 authorization…</span>        │
+  │   pay      · ${a.perCallHuman.padEnd(7)}                │
   │   model    · ${a.runtime.padEnd(20)}   │
   │                                     │
-  │ <span class="mu">[ ] seal break</span>                       │
+  │ <span class="mu">[ ] ship to enclave</span>                  │
   │ <span class="mu">[ ] attestation chip</span>                 │
   │ <span class="mu">[ ] signed receipt</span>                   │
   └─────────────────────────────────────┘`,
   break: () =>
     `  ┌─────────────────────────────────────┐
-  │ <span class="acc">[#] sealed bundle ✓</span>                 │
+  │ <span class="acc">[#] payment settled on Base ✓</span>       │
   │                                     │
   │ <span class="am">[/] dispatching to enclave…</span>          │
   │   tee-ml · 0g-compute               │
@@ -604,25 +473,25 @@ const FRAMES: Record<Phase, (a: AgentDetail) => string> = {
   └─────────────────────────────────────┘`,
   chip: () =>
     `  ┌─────────────────────────────────────┐
-  │ <span class="acc">[#] sealed bundle ✓</span>                 │
+  │ <span class="acc">[#] payment settled ✓</span>               │
   │ <span class="acc">[/] enclave returned response ✓</span>     │
   │   response · signed                 │
   │                                     │
   │ <span class="acc">[✓] attestation chip generated</span>      │
   │   signer   · teeml                  │
   │                                     │
-  │ <span class="am">[≡] writing receipt onchain…</span>         │
+  │ <span class="am">[≡] returning receipt…</span>               │
   └─────────────────────────────────────┘`,
   receipt: (a) =>
     `  ┌─────────────────────────────────────┐
-  │ <span class="acc">[#] sealed bundle ✓</span>                 │
+  │ <span class="acc">[#] payment settled ✓</span>               │
   │ <span class="acc">[/] enclave returned response ✓</span>     │
   │ <span class="acc">[✓] attestation chip ✓</span>              │
-  │ <span class="acc">[≡] receipt written ✓</span>               │
+  │ <span class="acc">[≡] receipt returned ✓</span>              │
   │                                     │
   │   total  · ${a.perCallHuman.padEnd(7)} settled         │
   │   model  · ${a.runtime.padEnd(24)}     │
-  │   chain  · base-sepolia             │
+  │   chain  · base mainnet             │
   └─────────────────────────────────────┘`,
 };
 
