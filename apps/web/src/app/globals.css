@@ -1479,6 +1479,55 @@
   .ss-field .help { font-size: 13px; color: var(--mute); }
   .ss-field .help .ok { color: var(--green); }
 
+  /* launch wizard — credential + skill inputs (light, on-theme; replaces the
+     old hardcoded near-black input boxes) */
+  .ss-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--hair);
+    color: var(--fg);
+    padding: 9px 11px;
+    border-radius: 3px;
+    font: inherit;
+    font-size: 14px;
+  }
+  .ss-input::placeholder { color: var(--mute-2); }
+  .ss-cap {
+    display: block;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--mute);
+    margin-bottom: 4px;
+  }
+  .cred-card {
+    border: 1px solid var(--hair);
+    background: var(--panel);
+    border-radius: 4px;
+    padding: 12px;
+  }
+  .cred-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) auto;
+    gap: 10px;
+    align-items: end;
+  }
+  .cred-del {
+    border: 1px solid var(--hair);
+    color: var(--mute);
+    background: transparent;
+    padding: 0 12px;
+    height: 36px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+  .cred-del:hover { border-color: var(--red); color: var(--red); }
+  .cred-path { margin-top: 8px; font-size: 12px; color: var(--mute); }
+  .cred-path code { color: var(--accent); background: var(--accent-tint); padding: 1px 5px; border-radius: 2px; }
+  @media (max-width: 640px) { .cred-grid { grid-template-columns: 1fr; } }
+
   /* status badge (filled background) */
   .badge {
     display: inline-flex; align-items: center; gap: 6px;
