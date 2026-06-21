@@ -46,6 +46,10 @@ export interface DynamicAgent {
   /** Populated when the operator registers a real ENS subname under
    *  slopstock.eth pointing at the vault. e.g. "whale.slopstock.eth". */
   ensName?: string;
+  /** The TEE signer/measurement this agent's sealed-compute responses attest to
+   *  (recovered === expected on every verified turn). Surfaced in the UI so the
+   *  receipt can show a real "match · trusted" instead of a zero placeholder. */
+  expectedTeeMeasurement?: string;
   // ─── Manifest fields (set when the agent was minted with a real-agent
   //     bundle on 0G Storage). Optional for backward compat with v1 dynamic
   //     agents. See docs/12-real-agent-launch.md. ────────────────────────

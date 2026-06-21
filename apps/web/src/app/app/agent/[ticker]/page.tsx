@@ -265,12 +265,12 @@ export default async function AgentDetailPage({ params }: PageProps) {
             <div className="lhs"><span>metadata</span><span className="tag muted">onchain</span></div>
           </div>
           <div className="kv">
-            <KvRow k="inft contract" v={shortAddr(agent.contracts.iNFT, 6)} />
-            <KvRow k="share contract" v={shortAddr(agent.contracts.shareToken, 6)} />
-            <KvRow k="vault" v={shortAddr(agent.contracts.vault, 6)} />
-            <KvRow k="ipo sale" v={shortAddr(agent.contracts.ipoSale, 6)} />
+            <KvRow k="inft contract" v={addrOrNone(agent.contracts.iNFT)} />
+            <KvRow k="share contract" v={addrOrNone(agent.contracts.shareToken, "not issued")} />
+            <KvRow k="vault" v={addrOrNone(agent.contracts.vault, "not issued")} />
+            <KvRow k="ipo sale" v={addrOrNone(agent.contracts.ipoSale, "not issued")} />
             <KvRow k="runtime" v={agent.modelBase} />
-            <KvRow k="tee meas." v={shortAddr(agent.expectedTeeMeasurement, 8)} accent />
+            <KvRow k="tee meas." v={addrOrNone(agent.expectedTeeMeasurement, "pending first call", 8)} accent />
             <KvRow k="x402 endpoint" v={`/x402/infer?tokenId=${agent.tokenId} · ${agent.perCallHuman}`} />
             <KvRow k="ens" v={`${agent.ens} · subnames open`} />
           </div>
@@ -324,6 +324,12 @@ function KvRow({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
       <div className="v" style={accent ? { color: "var(--accent)" } : undefined}>{v}</div>
     </>
   );
+}
+
+/** Show a short address, or an honest "— <label>" when it's the zero address
+ *  (so un-deployed contracts read as intentional, not as a broken 0x000…000). */
+function addrOrNone(addr: string, label = "not set", chars = 6): string {
+  return /^0x0+$/i.test(addr) ? `— ${label}` : shortAddr(addr as `0x${string}`, chars);
 }
 
 function pctNum(num: bigint, den: bigint): number {
