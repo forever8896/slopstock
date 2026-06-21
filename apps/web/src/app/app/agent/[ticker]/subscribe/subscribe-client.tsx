@@ -115,7 +115,10 @@ export function SubscribeClient({ agent }: Props) {
         readContract: (a: Parameters<NonNullable<typeof publicClient>["readContract"]>[0]) => publicClient!.readContract(a),
       } as unknown as ConstructorParameters<typeof ExactEvmScheme>[0];
       const client = new x402Client().register("eip155:8453", new ExactEvmScheme(signer));
-      const payFetch = wrapFetchWithPayment(fetch, client);
+      // Bind fetch to the window so the x402 wrapper can't trip "Illegal
+      // invocation"/"Failed to fetch" when it calls the base fetch unbound.
+      const boundFetch = (input: RequestInfo | URL, init?: RequestInit) => window.fetch(input, init);
+      const payFetch = wrapFetchWithPayment(boundFetch as unknown as typeof fetch, client);
 
       setPhase("break");
       setStep(3);
