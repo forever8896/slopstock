@@ -116,6 +116,8 @@ interface ResolvedAgent {
   perCallUsdc?: bigint;
   perCallHuman?: string;
   hasFinance: boolean;
+  /** Operator-supplied TEE measurement (real attested value), if set. */
+  expectedTeeMeasurement?: string;
   // Real-Agent Launch metadata (only present for manifest-minted dynamic agents)
   realAgent?: AgentDetail["realAgent"];
 }
@@ -134,6 +136,8 @@ interface DynamicAgentRecord {
    *  deploy-finance. e.g. "whale.slopstock.eth". Falls back to placeholder
    *  if not yet registered. */
   ensName?: string;
+  /** TEE signer/measurement this agent's sealed-compute responses attest to. */
+  expectedTeeMeasurement?: string;
   // Real-Agent Launch fields (optional)
   templateId?: string;
   runtimeTier?: "openai-compat" | "tools-lite" | "hermes";
@@ -188,6 +192,7 @@ async function resolveAgentForReads(ticker: string): Promise<ResolvedAgent | nul
     return {
       ticker: upper,
       ens: dyn.ensName ?? `${upper.toLowerCase()}.permissionless`,
+      expectedTeeMeasurement: dyn.expectedTeeMeasurement,
       tokenId: BigInt(dyn.tokenId),
       shareToken: dyn.finance.shareToken as Hex,
       revenueVault: dyn.finance.revenueVault as Hex,
@@ -206,7 +211,8 @@ async function resolveAgentForReads(ticker: string): Promise<ResolvedAgent | nul
   // Dynamic agent that hasn't run deploy-finance yet — addresses unknown.
   return {
     ticker: upper,
-    ens: `${upper.toLowerCase()}.permissionless`,
+    ens: dyn.ensName ?? `${upper.toLowerCase()}.permissionless`,
+    expectedTeeMeasurement: dyn.expectedTeeMeasurement,
     tokenId: BigInt(dyn.tokenId),
     shareToken: "0x0000000000000000000000000000000000000000" as Hex,
     revenueVault: "0x0000000000000000000000000000000000000000" as Hex,
@@ -400,7 +406,8 @@ export async function loadAgentDetail(ticker: string): Promise<AgentDetail | nul
       name: resolved.ticker.toLowerCase(),
       description: resolved.description ?? "Permissionless agent — shares not yet deployed.",
       modelBase: resolved.modelBase ?? "(unknown)",
-      expectedTeeMeasurement: (resolved.realAgent?.bundleManifestCid ??
+      expectedTeeMeasurement: (resolved.expectedTeeMeasurement ??
+        resolved.realAgent?.bundleManifestCid ??
         ("0x" + "00".repeat(32))) as Hex,
       ipo: {
         pricePerShareUsdc: 0n,

@@ -271,6 +271,12 @@ export async function handleRegisterAgent(req: Request, deps: Pick<HttpDeps, "co
     /** Optional tool credentials to store in 1Claw at launch (plan 09). Each
      *  value is consumed here and NEVER persisted to our registry/manifest/logs. */
     credentials?: unknown;
+    /** Optional: real ENS subname for this agent (e.g. "yield.slopstock.eth"). */
+    ensName?: unknown;
+    /** Optional: the TEE signer/measurement this agent attests to. */
+    expectedTeeMeasurement?: unknown;
+    /** Optional: pre-deployed finance contracts (else set via deploy-finance). */
+    finance?: unknown;
   };
   let body: RegisterBody;
   try {
@@ -315,6 +321,9 @@ export async function handleRegisterAgent(req: Request, deps: Pick<HttpDeps, "co
     txHash: String(body.txHash),
     createdAt: Math.floor(Date.now() / 1000),
     ...(body.tools !== undefined ? { tools: body.tools } : {}),
+    ...(body.ensName ? { ensName: String(body.ensName) } : {}),
+    ...(body.expectedTeeMeasurement ? { expectedTeeMeasurement: String(body.expectedTeeMeasurement) } : {}),
+    ...(body.finance ? { finance: body.finance as DynamicAgent["finance"] } : {}),
   };
 
   await registerDynamicAgent(record);
