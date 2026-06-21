@@ -91,6 +91,9 @@ type InFlightState =
       receipt: unknown;
       callId: string;
       authorizeUsageTx: `0x${string}` | null;
+      /** Compact execution transcript for the UI flow viz (tool calls, peer
+       *  payments, on-chain reads). Safe to expose — never carries secrets. */
+      steps: Array<{ kind: string; tool?: string; summary: string }>;
       completedAt: number;
     }
   | { status: "error"; message: string; completedAt: number };
@@ -845,12 +848,22 @@ async function runInferenceAsync(args: AsyncInferArgs): Promise<void> {
     );
     recordReceipt(inferenceReceipt);
     const grantTx = await grantPromise;
+    // Compact the transcript into UI-safe steps (drop raw content; keep the
+    // tool name + its short summary, which is where peer-payment lines live).
+    const steps = (taskOutput.transcript ?? []).map((s) => {
+      if (s.kind === "tool") return { kind: "tool", tool: s.tool, summary: s.resultSummary };
+      if (s.kind === "llm") return { kind: "llm", summary: `${s.model}` };
+      if (s.kind === "skill_create") return { kind: "skill", summary: `learned skill: ${s.skill}` };
+      if (s.kind === "memory_write") return { kind: "memory", summary: `noted: ${s.key}` };
+      return { kind: s.kind, summary: "" };
+    });
     inFlight.set(callId, {
       status: "complete",
       output: taskOutput.output,
       receipt: inferenceReceipt,
       callId,
       authorizeUsageTx: grantTx,
+      steps,
       completedAt: Date.now(),
     });
   } catch (err) {
@@ -888,6 +901,7 @@ function handleInferResult(callId: string): Response {
     output: state.output,
     receipt: state.receipt,
     authorizeUsageTx: state.authorizeUsageTx,
+    steps: state.steps,
   });
 }
 

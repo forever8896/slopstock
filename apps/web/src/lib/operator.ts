@@ -31,11 +31,19 @@ export interface InferRequest {
   paymentReceipt?: PaymentReceipt;
 }
 
+export interface AgentStepLite {
+  kind: string;
+  tool?: string;
+  summary: string;
+}
+
 export interface InferSuccess {
   ok: true;
   callId: string;
   output: string;
   receipt: InferenceReceipt;
+  /** Execution transcript (tool calls, peer payments, on-chain reads) for the flow viz. */
+  steps?: AgentStepLite[];
 }
 
 export interface InferPaymentRequired {
@@ -74,7 +82,7 @@ async function pollInferResult(callId: string): Promise<InferResult> {
     if (res.status === 404) {
       return { ok: false, kind: "error", status: 404, message: "call not found (operator restarted?)" };
     }
-    let body: { status?: string; callId?: string; output?: string; receipt?: InferenceReceipt; message?: string };
+    let body: { status?: string; callId?: string; output?: string; receipt?: InferenceReceipt; message?: string; steps?: AgentStepLite[] };
     try {
       body = await res.json();
     } catch {
@@ -82,7 +90,7 @@ async function pollInferResult(callId: string): Promise<InferResult> {
     }
     if (body.status === "running") continue;
     if (body.status === "complete" && body.callId && body.output && body.receipt) {
-      return { ok: true, callId: body.callId, output: body.output, receipt: body.receipt };
+      return { ok: true, callId: body.callId, output: body.output, receipt: body.receipt, steps: body.steps };
     }
     if (body.status === "error") {
       return { ok: false, kind: "error", status: 500, message: body.message ?? "operator error" };
