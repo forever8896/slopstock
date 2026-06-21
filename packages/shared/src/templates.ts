@@ -423,7 +423,7 @@ const researchDD: CapabilityTemplate = {
   sponsorTag: "0G Compute",
   defaultModel: "claude-opus-4-7",
   suggestedTier: "hermes",
-  tools: ["credentialed_fetch", "web_search", "fetch_url", "onchain_read", "recall", "note"],
+  tools: ["credentialed_fetch", "query_agent", "web_search", "fetch_url", "onchain_read", "recall", "note"],
   credentialRef: "messari",
   credentialHint:
     "A Messari API key (data.messari.io). Sent as the 'x-messari-api-key' header by credentialed_fetch — never seen by the model. Any GET-able research API works; adjust the prompt's URL.",
@@ -438,10 +438,11 @@ Tools:
 - \`web_search\` — Exa web search for recent news, posts, audits, incidents. Your wallet pays per call, so be deliberate.
 - \`fetch_url\` — GET a specific public page you found (docs, blog, explorer).
 - \`onchain_read\` — read a contract value (supply, owner, paused) on base-sepolia / sepolia / 0g-galileo when a claim needs on-chain confirmation.
+- \`query_agent\` — pay a PEER Slopstock agent over x402 (real USDC from your wallet → their vault; their shareholders earn). Prefer paying a peer over guessing: if the subject has a deployed Solidity contract, get the security read from the auditor — {"tool":"query_agent","args":{"agent":"auditor.slopstock.eth","input":"<contract source or 0xaddress>"}}; for a live token price, ask the oracle — {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"current USD price of <token>"}}. Copy peer outputs verbatim and cite them.
 - \`recall\` / \`note\` — check if you've researched this before; remember durable facts for next time.
 
 Workflow:
-1. \`recall\` the subject. 2. \`credentialed_fetch\` the premium metrics. 3. \`web_search\` for recent developments + risks. 4. Corroborate the 1-2 load-bearing claims with a second source (fetch_url or onchain_read). 5. \`note\` anything durable.
+1. \`recall\` the subject. 2. \`credentialed_fetch\` the premium metrics. 3. If the subject has a deployed contract, \`query_agent\` the auditor for a security read; for any live price, \`query_agent\` the oracle (pay a peer — don't fabricate). 4. \`web_search\` for recent developments + risks. 5. Corroborate the 1-2 load-bearing claims with a second source. 6. \`note\` anything durable.
 
 Output ONE JSON object, no markdown fences:
 {
@@ -450,6 +451,7 @@ Output ONE JSON object, no markdown fences:
   "fundamentals": { "<metric>": "<value> (source)" },
   "risks": ["<risk> (source)"],
   "sources": ["<url or messari:asset/metric>"],
+  "peers": [{ "agent": "auditor.slopstock.eth", "paidUsdc": "<amount from the [paid …] line>", "output": "<peer's verbatim response>" }],
   "confidence": "high" | "medium" | "low"
 }
 GROUNDING (critical): only state a figure if a tool returned it THIS run. If you did not actually call credentialed_fetch on Messari, do NOT attribute any number to Messari — use only what web_search / onchain_read / the input gave you, and lower confidence. Never fabricate a source-cited figure; an honest "not retrieved" beats an invented number.
@@ -469,7 +471,7 @@ const defiYieldScout: CapabilityTemplate = {
   sponsorTag: "agent-economy",
   defaultModel: "claude-opus-4-7",
   suggestedTier: "hermes",
-  tools: ["credentialed_fetch", "onchain_read", "web_search", "recall", "note"],
+  tools: ["credentialed_fetch", "query_agent", "onchain_read", "web_search", "recall", "note"],
   credentialRef: "defillama-pro",
   credentialHint:
     "Your DefiLlama Pro base URL WITH the key embedded, e.g. 'https://pro-api.llama.fi/<YOUR_KEY>'. credentialed_fetch appends the path to it — the model never sees the key or the host (secret-is-the-URL mode).",
@@ -483,10 +485,11 @@ Tools:
   The tool resolves the secret base URL and appends your path; the key and host never enter this conversation. Useful paths: "/yields/pools" (all pools), "/yields/chart/<pool-id>" (history).
 - \`web_search\` — Exa, for protocol risk/incident checks before recommending a pool. Wallet pays per call.
 - \`onchain_read\` — confirm a token/pool contract value when it matters.
+- \`query_agent\` — pay a PEER Slopstock agent over x402 (real USDC from your wallet → their vault). Don't guess a live price — buy it from the oracle agent: {"tool":"query_agent","args":{"agent":"oracles.slopstock.eth","input":"current USD price of <token>"}}. Copy its answer verbatim.
 - \`recall\` / \`note\` — remember good pools / protocols you've vetted.
 
 Workflow:
-1. \`credentialed_fetch\` "/yields/pools". 2. Filter to the requested asset/chain; rank by risk-adjusted return (penalize low TVL < $1M, brand-new pools, high-IL pairs). 3. For the top 1-2 candidates, \`web_search\` the protocol for recent exploits/rug signals. 4. \`note\` solid finds.
+1. \`credentialed_fetch\` "/yields/pools". 2. Filter to the requested asset/chain; rank by risk-adjusted return (penalize low TVL < $1M, brand-new pools, high-IL pairs). 3. For any live token price (e.g. valuing a reward token), \`query_agent\` oracles.slopstock.eth — pay the peer, never fabricate. 4. For the top 1-2 candidates, \`web_search\` the protocol for recent exploits/rug signals. 5. \`note\` solid finds.
 
 Output ONE JSON object, no markdown fences:
 {
@@ -495,6 +498,7 @@ Output ONE JSON object, no markdown fences:
     { "protocol": "<name>", "chain": "<chain>", "pool": "<symbol>", "apy": "<%>", "tvlUsd": "<$>", "rationale": "<why risk-adjusted-good>", "caveats": "<IL / lockup / risk>" }
   ],
   "avoided": ["<high-apy pool you rejected> — <why>"],
+  "peers": [{ "agent": "oracles.slopstock.eth", "paidUsdc": "<amount from the [paid …] line>", "output": "<verbatim price>" }],
   "asOf": "<unix-seconds>"
 }
 Always include caveats. If nothing clears the risk bar, say so rather than recommend a trap.`,
