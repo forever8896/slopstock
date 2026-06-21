@@ -47,7 +47,7 @@ import {
   OgStorageNotFoundError,
 } from "../storage/og-storage-impl.ts";
 import {
-  getNetwork,
+  resolveNetwork,
 } from "@stratum/shared";
 import {
   buildAgentPaymentRequirements,
@@ -57,6 +57,7 @@ import {
   settleResponseHeader,
 } from "./x402-v2.ts";
 import { readSplitConfig, resolvePayTo, forwardNetToVault } from "../funding/split-config.ts";
+import { agentWalletFor } from "../runtime/agent-wallet.ts";
 import { handleDemoScript } from "../agents/demo-script/http-handler.ts";
 import { handleDrillCypher } from "../agents/drill-cypher/http-handler.ts";
 
@@ -71,9 +72,17 @@ export interface HttpDeps {
   agentRegistryAddress: `0x${string}`;
 }
 
-// x402 v2: one facilitator client for the selected network (testnet keyless /
-// mainnet CDP). getNetwork() is memoized; the asset + network id come from it.
-const x402Net = getNetwork();
+// x402 v2 payment layer — DECOUPLED from the global NETWORK so payments can run
+// on mainnet while 0G/ENS reads stay on their own network. X402_NETWORK overrides
+// just the payment network; X402_FACILITATOR_URL points it at a facilitator for
+// that network (e.g. a keyless mainnet facilitator). Falls back to global NETWORK.
+const _x402Base = resolveNetwork({
+  ...process.env,
+  NETWORK: process.env["X402_NETWORK"] ?? process.env["NETWORK"] ?? "testnet",
+});
+const x402Net = process.env["X402_FACILITATOR_URL"]
+  ? { ..._x402Base, x402: { ..._x402Base.x402, facilitatorUrl: process.env["X402_FACILITATOR_URL"] } }
+  : _x402Base;
 const x402Facilitator = createFacilitator(x402Net);
 
 /**
@@ -737,6 +746,12 @@ async function handleInfer(req: Request, deps: HttpDeps): Promise<Response> {
   const splitCfg = readSplitConfig();
   const vaultRecipient = recipient;
   recipient = resolvePayTo(vaultRecipient, splitCfg);
+  // Self-funding: when the payment network is mainnet, route inbound USDC to the
+  // agent's OWN working wallet (the one it spends from via outbound x402), so it
+  // earns into the budget it operates on. Testnet keeps the vault/split path.
+  if (x402Net.name === "mainnet") {
+    recipient = agentWalletFor(deps.config.OPERATOR_PRIVATE_KEY as `0x${string}`, tokenId).address;
+  }
   const pricing = priceForToken(tokenId);
 
   // x402 v2: build spec requirements (network + asset from getNetwork()) and gate
