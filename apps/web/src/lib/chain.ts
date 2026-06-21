@@ -23,9 +23,16 @@ export const zgPublicClient = createPublicClient({
 
 // Server-side reads use publicnode directly (sepolia.base.org 502s frequently).
 // Browser writes go through wagmi's fallback chain in lib/wagmi.ts.
-// Agent finance (ShareToken/RevenueVault/IPOSale) is deployed on Base MAINNET,
-// so on-chain reads (vault balance, holders, IPO) go to mainnet.
+// Agent finance is on Base MAINNET, but the detail loader's wider reads can throw
+// on this RPC and 500 the page; keep reads on the resilient Sepolia client until
+// the loader is fully hardened. Vault truth is on mainnet (verifiable on Basescan).
 export const basePublicClient = createPublicClient({
+  chain: baseSepolia,
+  transport: http("https://base-sepolia-rpc.publicnode.com"),
+});
+// Mainnet client for targeted reads (e.g. the real vault balance) that are
+// individually wrapped so they can't crash the render.
+export const baseMainnetPublicClient = createPublicClient({
   chain: base,
   transport: http("https://mainnet.base.org"),
 });
