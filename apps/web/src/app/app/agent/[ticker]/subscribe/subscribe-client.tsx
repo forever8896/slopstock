@@ -539,6 +539,31 @@ function ReceiptBlock({
         </div>
       </div>
 
+      {result.steps && result.steps.length > 0 ? (
+        <div className="exec-flow" style={{ marginTop: 18 }}>
+          <h4 style={{ margin: "0 0 10px" }}>execution flow</h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <FlowStep icon="▸" label="x402 paid" detail={`you → ${agent.ticker} · ${agent.perCallHuman} on Base`} accent />
+            <FlowStep icon="✦" label="0G sealed compute" detail="deepseek · TEE-attested in the enclave" />
+            {result.steps
+              .filter((s) => s.kind !== "llm")
+              .map((s, i) => {
+                const peer = s.tool === "query_agent" || /paid .*(x402|to )/i.test(s.summary);
+                return (
+                  <FlowStep
+                    key={i}
+                    icon={peer ? "⇄" : s.kind === "tool" ? "⚙" : s.kind === "skill" ? "✚" : "·"}
+                    label={peer ? "agent → agent · x402" : (s.tool ?? s.kind)}
+                    detail={s.summary}
+                    accent={peer}
+                  />
+                );
+              })}
+            <FlowStep icon="✓" label="answer" detail="signed by the model · returned" accent />
+          </div>
+        </div>
+      ) : null}
+
       <div className="out">
         <h4>response</h4>
         <InferenceOutput raw={result.output} />
@@ -600,3 +625,23 @@ const FRAMES: Record<Phase, (a: AgentDetail) => string> = {
   │   chain  · base-sepolia             │
   └─────────────────────────────────────┘`,
 };
+
+function FlowStep({ icon, label, detail, accent }: { icon: string; label: string; detail: string; accent?: boolean }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 10,
+        padding: "7px 10px",
+        borderLeft: `2px solid ${accent ? "var(--accent, #10b981)" : "rgba(255,255,255,0.12)"}`,
+        background: accent ? "rgba(16,185,129,0.05)" : "transparent",
+        borderRadius: 2,
+      }}
+    >
+      <span style={{ color: accent ? "var(--accent, #10b981)" : "var(--fg-2)", fontFamily: "ui-monospace, monospace", width: 16 }}>{icon}</span>
+      <span style={{ fontWeight: 600, fontSize: 13, minWidth: 130, color: accent ? "var(--accent, #10b981)" : "var(--fg)" }}>{label}</span>
+      <span style={{ fontSize: 12, color: "var(--fg-2)", wordBreak: "break-word" }}>{detail}</span>
+    </div>
+  );
+}
