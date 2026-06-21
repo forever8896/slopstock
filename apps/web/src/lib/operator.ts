@@ -8,7 +8,11 @@
 
 import type { InferenceReceipt } from "@stratum/shared";
 
-const OPERATOR_URL = process.env["NEXT_PUBLIC_OPERATOR_URL"] ?? "http://127.0.0.1:8402";
+// Fall back to the production operator (not localhost) so a missing/un-inlined
+// NEXT_PUBLIC_OPERATOR_URL in a client bundle can't make the browser fetch
+// http://127.0.0.1:8402 → "Failed to fetch".
+const OPERATOR_URL =
+  process.env["NEXT_PUBLIC_OPERATOR_URL"]?.trim() || "https://slopstock-operator-production.up.railway.app";
 
 export interface PaymentChallenge {
   network: "base";
